@@ -3710,23 +3710,76 @@ def build_executive_dashboard_summary(
         return f"{count} {singular if count == 1 else plural}"
 
     highest_priority_action = ""
-    if not executive_actions.empty and "Supplier" in executive_actions.columns:
-        top_action_row = executive_actions.iloc[0]
-        action_supplier = str(top_action_row.get("Supplier", "")).strip()
-        action_text = str(top_action_row.get("Recommended Action", top_action_row.get("Action Plan", ""))).strip()
-        action_decision = str(top_action_row.get("Decision", "")).strip()
-        if action_supplier:
-            if not action_text:
-                if "exit" in action_decision.lower() or "de-prioritize" in action_decision.lower():
-                    action_text = "test whether demand can move away from this supplier without creating new risk"
-                elif "consolidate" in action_decision.lower() or "keep" in action_decision.lower():
-                    action_text = "test whether consolidating more volume here improves the portfolio without increasing exposure"
+    if not supplier_summary.empty and "supplier" in supplier_summary.columns:
+        issue_clauses: List[str] = []
+        if {"supplier", "supports_single_source"}.issubset(supplier_summary.columns):
+            single_source_suppliers = (
+                supplier_summary.loc[supplier_summary["supports_single_source"], "supplier"]
+                .astype(str)
+                .drop_duplicates()
+                .tolist()
+            )
+            if single_source_suppliers:
+                issue_clauses.append(f"{format_name_list(single_source_suppliers, max_items=4)} for single-source dependency")
+        if {"supplier", "supports_high_risk"}.issubset(supplier_summary.columns):
+            high_risk_suppliers = (
+                supplier_summary.loc[supplier_summary["supports_high_risk"], "supplier"]
+                .astype(str)
+                .drop_duplicates()
+                .tolist()
+            )
+            if high_risk_suppliers:
+                issue_clauses.append(f"{format_name_list(high_risk_suppliers, max_items=4)} for high-risk component exposure")
+        if {"supplier", "defect_rate"}.issubset(supplier_summary.columns):
+            defect_cutoff = float(supplier_summary["defect_rate"].quantile(0.75)) if len(supplier_summary) else 0.0
+            quality_suppliers = (
+                supplier_summary.loc[supplier_summary["defect_rate"] >= defect_cutoff, "supplier"]
+                .astype(str)
+                .drop_duplicates()
+                .tolist()
+            )
+            if quality_suppliers and defect_cutoff > 0:
+                issue_clauses.append(f"{format_name_list(quality_suppliers, max_items=4)} for higher defect rates")
+        if {"supplier", "avg_lead_time"}.issubset(supplier_summary.columns):
+            lead_cutoff = float(supplier_summary["avg_lead_time"].quantile(0.75)) if len(supplier_summary) else 0.0
+            lead_suppliers = (
+                supplier_summary.loc[supplier_summary["avg_lead_time"] >= lead_cutoff, "supplier"]
+                .astype(str)
+                .drop_duplicates()
+                .tolist()
+            )
+            if lead_suppliers and lead_cutoff > 0:
+                issue_clauses.append(f"{format_name_list(lead_suppliers, max_items=4)} for longer lead times")
+        if {"supplier", "avg_risk_score"}.issubset(supplier_summary.columns):
+            risk_cutoff = float(supplier_summary["avg_risk_score"].quantile(0.75)) if len(supplier_summary) else 0.0
+            external_risk_suppliers = (
+                supplier_summary.loc[supplier_summary["avg_risk_score"] >= risk_cutoff, "supplier"]
+                .astype(str)
+                .drop_duplicates()
+                .tolist()
+            )
+            if external_risk_suppliers and risk_cutoff > 0:
+                issue_clauses.append(f"{format_name_list(external_risk_suppliers, max_items=4)} for elevated external risk")
+
+        top_action_text = ""
+        if not executive_actions.empty and "Supplier" in executive_actions.columns:
+            top_action_row = executive_actions.iloc[0]
+            top_action_text = str(top_action_row.get("Recommended Action", top_action_row.get("Action Plan", ""))).strip()
+            top_action_decision = str(top_action_row.get("Decision", "")).strip()
+            if not top_action_text:
+                if "exit" in top_action_decision.lower() or "de-prioritize" in top_action_decision.lower():
+                    top_action_text = "test whether demand can move away from the clearest exit candidates without creating new risk"
+                elif "consolidate" in top_action_decision.lower() or "keep" in top_action_decision.lower():
+                    top_action_text = "test whether consolidating more volume with the strongest suppliers improves the portfolio without increasing exposure"
                 else:
-                    action_text = "review quality, lead time, and exposure trends before deciding whether intervention is needed"
+                    top_action_text = "review quality, lead time, and exposure trends before deciding whether intervention is needed"
+
+        if issue_clauses:
             highest_priority_action = (
-                f"The most urgent supplier action is to address {action_supplier}, where the current recommendation is to {action_text.lower()}."
-                if action_text
-                else f"The most urgent supplier action is to address {action_supplier}."
+                f"Priority supplier actions should focus on {'; '.join(issue_clauses[:5])}. "
+                f"We should begin by using scenario analysis to {top_action_text.lower()}."
+                if top_action_text
+                else f"Priority supplier actions should focus on {'; '.join(issue_clauses[:5])}."
             )
 
     concentration_sentence = (
@@ -3958,7 +4011,7 @@ def build_decision_mix_summary_text(supplier_summary: pd.DataFrame) -> str:
         .head(2)
     )
     driver_map = {
-        decision: format_name_list(group["supplier"].astype(str).tolist(), max_items=2)
+        decision: format_issue_name_list(group["supplier"].astype(str).tolist())
         for decision, group in driver_rows.groupby("decision")
     }
 
@@ -4110,13 +4163,14 @@ def build_component_analysis_summary(component_summary: pd.DataFrame) -> str:
         else "no high-risk components were found"
     )
     strategic_text = (
-        f"the {strategic_count} Strategic-quadrant components include {', '.join(strategic_components[:6])}"
+        f"the {strategic_count} Strategic-quadrant components include {format_issue_name_list(strategic_components)}"
         if strategic_components
         else "no Strategic-quadrant components were identified"
     )
     return (
         "Component analysis connects spend, supplier coverage, quality, and risk so teams can target the parts that most affect continuity and profit. "
-        f"Major takeaways: {single_source_text}, {high_risk_text}, {strategic_text}, "
+        f"Major takeaways: {single_source_text.replace(', '.join(single_source_components), format_issue_name_list(single_source_components)) if single_source_components else single_source_text}, "
+        f"{high_risk_text.replace(', '.join(high_risk_components), format_issue_name_list(high_risk_components)) if high_risk_components else high_risk_text}, {strategic_text}, "
         f"and {top_priority['component']} is the top strategic-priority component with the highest strategic priority score."
     )
 
@@ -4150,15 +4204,15 @@ def build_component_supplier_detail_summary(component_supplier_detail: pd.DataFr
     ].sort_values(["spend", "component", "supplier"], ascending=[False, True, True])
     concentration_pairs = [
         f"{row['supplier']} for {row['component']}"
-        for row in most_concentrated_rows.head(4).to_dict(orient="records")
+        for row in most_concentrated_rows.to_dict(orient="records")
     ]
     concentration_text = (
-        f"{', '.join(concentration_pairs[:-1])}, and {concentration_pairs[-1]} currently carry the largest effective coverage share at {max_effective_share:.0%}"
+        f"{format_issue_name_list(concentration_pairs)} currently carry the largest effective coverage share at {max_effective_share:.0%}"
         if len(concentration_pairs) > 1
         else f"{concentration_pairs[0]} currently carries the largest effective coverage share at {max_effective_share:.0%}"
     )
     single_source_text = (
-        "the single-source components are " + ", ".join(single_source_components)
+        "the single-source components are " + format_issue_name_list(single_source_components)
         if single_source_components
         else "no single-source components were found"
     )
@@ -4173,7 +4227,7 @@ def build_pareto_summary(spend_pareto: pd.DataFrame, risk_pareto: pd.DataFrame, 
     if spend_pareto.empty or risk_pareto.empty or strategic_pareto.empty:
         return "ABC/Pareto analysis is used to separate the small number of items driving most value or risk from the long tail. In general, A items are the highest-priority few that drive most of the total, B items are the middle layer worth selective management attention, and C items are the long tail with lower relative impact."
     spend_a = spend_pareto.loc[spend_pareto["spend_abc"].eq("A"), "component"].tolist()
-    spend_a_text = ", ".join(spend_a[:6]) if spend_a else "no A-items were identified"
+    spend_a_text = format_issue_name_list(spend_a) if spend_a else "no A-items were identified"
     return (
         "ABC/Pareto analysis helps supply-chain teams focus scarce effort on the few items that drive the most spend. "
         "How to interpret it: A items are the highest-priority few that account for most of the cumulative total, B items are the middle tier that still merit active management, and C items are the long tail that usually need lighter-touch control. "
@@ -4188,11 +4242,11 @@ def build_risk_adjusted_pareto_summary(risk_pareto: pd.DataFrame) -> str:
     top_risk_adjusted = risk_pareto.sort_values("risk_adjusted_spend", ascending=False).iloc[0]
     high_risk_components = risk_pareto.loc[risk_pareto["sourcing_risk_level"].eq("High"), "component"].tolist()
     high_risk_text = (
-        f"the high-risk components in this ranking are {', '.join(high_risk_components[:6])}"
+        f"the high-risk components in this ranking are {format_issue_name_list(high_risk_components)}"
         if high_risk_components
         else "no components in this ranking are currently flagged high risk"
     )
-    risk_a_text = ", ".join(risk_a[:6]) if risk_a else "no A-items were identified"
+    risk_a_text = format_issue_name_list(risk_a) if risk_a else "no A-items were identified"
     return (
         "Risk-adjusted Pareto combines spend with quality burden, single-source exposure, and sourcing risk so the ranking reflects practical supply-chain impact rather than spend alone. "
         f"Major takeaways: the A-items in this ranking are {risk_a_text}, "
@@ -4219,8 +4273,8 @@ def build_risk_analysis_summary(component_summary: pd.DataFrame, supplier_risk_a
     return (
         "Risk analysis highlights where supply interruption, quality failure, or concentration could affect service and cost. "
         f"Major takeaways: the highest-risk component is {top_risk_component['component']} with a supply risk score of {top_risk_component['supply_risk_score']:.1f}, "
-        f"{'high-risk components are ' + ', '.join(high_risk_components) if high_risk_components else 'no high-risk components were found'}, "
-        f"and {'suppliers currently flagged high risk are ' + ', '.join(high_risk_suppliers) if high_risk_suppliers else 'no suppliers are currently flagged high risk'}."
+        f"{'high-risk components are ' + format_issue_name_list(high_risk_components) if high_risk_components else 'no high-risk components were found'}, "
+        f"and {'suppliers currently flagged high risk are ' + format_issue_name_list(high_risk_suppliers) if high_risk_suppliers else 'no suppliers are currently flagged high risk'}."
         + flagged_supplier_explanation
     )
 
@@ -4260,6 +4314,11 @@ def format_name_list(values: List[str], max_items: int = 5) -> str:
     return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 
+def format_issue_name_list(values: List[str]) -> str:
+    ordered_unique = list(dict.fromkeys(str(v) for v in values if str(v).strip()))
+    return format_name_list(ordered_unique, max_items=max(len(ordered_unique), 1))
+
+
 def build_supplier_concentration_summary(component_summary: pd.DataFrame) -> str:
     if component_summary.empty:
         return "Supplier concentration analysis shows where component demand depends too heavily on one supplier."
@@ -4268,7 +4327,7 @@ def build_supplier_concentration_summary(component_summary: pd.DataFrame) -> str
     return (
         "Supplier concentration analysis shows where demand is concentrated with one supplier, which is a direct resilience and continuity concern. "
         f"Major takeaways: {top_concentration['component']} has the highest concentration at {top_concentration['largest_supplier_share']:.0%}, "
-        f"and {'the single-source components are ' + ', '.join(single_source_components) if single_source_components else 'no single-source components were found'}."
+        f"and {'the single-source components are ' + format_issue_name_list(single_source_components) if single_source_components else 'no single-source components were found'}."
     )
 
 
@@ -4296,7 +4355,7 @@ def build_supplier_component_mix_summary(
         .sort_values("spend", ascending=False)
     )
     strategic_supplier_text = (
-        f"The largest Strategic exposure currently sits with {strategic_suppliers.iloc[0]['supplier']}."
+        f"The suppliers carrying Strategic exposure are {format_issue_name_list(strategic_suppliers['supplier'].astype(str).tolist())}."
         if not strategic_suppliers.empty
         else ""
     )
@@ -4339,17 +4398,17 @@ def build_supplier_quadrant_mix_summary(
     bottleneck_supplier = quadrant_spend.loc[quadrant_spend["kraljic_quadrant"].eq("Bottleneck")].head(1)
     leverage_supplier = quadrant_spend.loc[quadrant_spend["kraljic_quadrant"].eq("Leverage")].head(1)
     strategic_text = (
-        f"The largest Strategic mix currently sits with {strategic_supplier.iloc[0]['supplier']}."
+        f"Strategic-heavy suppliers are {format_issue_name_list(strategic_supplier['supplier'].astype(str).tolist())}."
         if not strategic_supplier.empty
         else ""
     )
     bottleneck_text = (
-        f" The largest Bottleneck mix sits with {bottleneck_supplier.iloc[0]['supplier']}."
+        f" Bottleneck-heavy suppliers are {format_issue_name_list(bottleneck_supplier['supplier'].astype(str).tolist())}."
         if not bottleneck_supplier.empty
         else ""
     )
     leverage_text = (
-        f" The largest Leverage mix sits with {leverage_supplier.iloc[0]['supplier']}."
+        f" Leverage-heavy suppliers are {format_issue_name_list(leverage_supplier['supplier'].astype(str).tolist())}."
         if not leverage_supplier.empty
         else ""
     )
@@ -4568,10 +4627,10 @@ def build_kraljic_positioning_summary(component_summary: pd.DataFrame) -> str:
     bottleneck_components = component_summary.loc[component_summary["kraljic_quadrant"].eq("Bottleneck"), "component"].tolist()
     leverage_components = component_summary.loc[component_summary["kraljic_quadrant"].eq("Leverage"), "component"].tolist()
     non_critical_components = component_summary.loc[component_summary["kraljic_quadrant"].eq("Non-Critical"), "component"].tolist()
-    strategic_text = ", ".join(strategic_components[:5]) if strategic_components else "none"
-    bottleneck_text = ", ".join(bottleneck_components[:5]) if bottleneck_components else "none"
-    leverage_text = ", ".join(leverage_components[:5]) if leverage_components else "none"
-    non_critical_text = ", ".join(non_critical_components[:5]) if non_critical_components else "none"
+    strategic_text = format_issue_name_list(strategic_components) if strategic_components else "none"
+    bottleneck_text = format_issue_name_list(bottleneck_components) if bottleneck_components else "none"
+    leverage_text = format_issue_name_list(leverage_components) if leverage_components else "none"
+    non_critical_text = format_issue_name_list(non_critical_components) if non_critical_components else "none"
     return (
         "Kraljic positioning maps components by supply risk and profit impact so teams can separate Strategic, Bottleneck, "
         "Leverage, and Non-Critical items and align sourcing actions accordingly. "
