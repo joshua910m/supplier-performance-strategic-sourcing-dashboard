@@ -4787,6 +4787,40 @@ def show_table(df: pd.DataFrame):
     st.dataframe(df, width="stretch", hide_index=True)
 
 
+def render_user_guide() -> None:
+    st.subheader("How To Use This Tool")
+    render_narrative_text(
+        "This dashboard follows one shared workflow: load procurement data, review how the fields were interpreted, then move through supplier risk, sourcing, scenario testing, and action planning."
+    )
+
+    st.markdown("### 1. CSV / Excel Workflow")
+    st.write("1. Leave `Data Source` set to `Upload File` in the sidebar.")
+    st.write("2. Upload a CSV, XLSX, or XLS procurement file.")
+    st.write("3. Open `Data Quality / Inputs` to confirm the active source, inferred fields, and normalized preview.")
+    st.write("4. Review `Executive Dashboard` for the summary view and top supplier actions.")
+    st.write("5. Use `Component Risk`, `Supplier Decisions`, and `Strategic Sourcing` to understand spend concentration, risk, and sourcing priorities.")
+    st.write("6. Use `Scenario Analysis` to test supplier selection and mitigation choices before applying a scenario to the dashboard.")
+    st.write("7. Use `Action Plan` and `Exports` when you are ready to communicate or hand off the recommendations.")
+
+    st.markdown("### 2. SQL Workflow")
+    st.write("1. Change `Data Source` to `SQL Database` in the sidebar.")
+    st.write("2. Choose `SQL Connection Source`.")
+    st.write("3. Pick `Bundled SQL Example` for the built-in SQLite sample package, or `Configured SQL Connection` to use your own `connections.sql` database.")
+    st.write("4. Select an example query or edit the SQL manually. Only read-only `SELECT` and `WITH` queries are allowed.")
+    st.write("5. Click `Test SQL Connection` if you want to verify the connection first.")
+    st.write("6. Click `Load SQL Data` to run the query and route the results through the same normalization pipeline used for uploaded files.")
+    st.write("7. Confirm the load by checking the sidebar `Current source:` label and the `Preview Raw SQL Rows` expander.")
+    st.write("8. Review `Data Quality / Inputs` before moving through the rest of the dashboard tabs.")
+
+    st.markdown("### Recommended First Pass")
+    st.write("1. Load data.")
+    st.write("2. Validate the source and normalized preview in `Data Quality / Inputs`.")
+    st.write("3. Review the summary and KPIs in `Executive Dashboard`.")
+    st.write("4. Inspect `Component Risk` and `Supplier Decisions` to find the main exposure and supplier-action themes.")
+    st.write("5. Use `Scenario Analysis` only after the base dataset looks correct.")
+    st.write("6. Finish in `Action Plan` and `Exports` for follow-through.")
+
+
 def build_normalized_input_preview(df: pd.DataFrame, diagnostics: List[str]) -> pd.DataFrame:
     preview = df.head(50).copy()
     status_map = {
@@ -5681,6 +5715,7 @@ def render_app():
 
     tabs = st.tabs(
         [
+            "How To Use",
             "Executive Dashboard",
             "Data Quality / Inputs",
             "Component Risk",
@@ -5693,6 +5728,9 @@ def render_app():
     )
 
     with tabs[0]:
+        render_user_guide()
+
+    with tabs[1]:
         render_executive_dashboard(
             analytics,
             executive_actions,
@@ -5705,7 +5743,7 @@ def render_app():
             applied_scenario_metrics=applied_scenario_metrics if scenario_applied else None,
         )
 
-    with tabs[1]:
+    with tabs[2]:
         st.subheader("Data Quality & Inputs")
         render_narrative_text("Review the active data source, how core procurement fields were interpreted, and what the normalized input looks like before using the downstream portfolio views.")
         st.caption(data_source_label)
@@ -5719,7 +5757,7 @@ def render_app():
             show_table(build_normalized_input_preview(normalized_df, input_diagnostics))
         render_glossary_drawer()
 
-    with tabs[3]:
+    with tabs[4]:
         st.subheader("Supplier Spend Analysis")
         render_narrative_text(build_supplier_spend_summary(supplier_summary, component_summary))
         st.altair_chart(build_supplier_metric_chart(supplier_summary, "spend", "Spend", color_by_decision=False), width="stretch")
@@ -5735,7 +5773,7 @@ def render_app():
             ),
         )
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("Component Spend Analysis")
         render_narrative_text(build_component_spend_summary(component_summary))
         st.altair_chart(build_component_risk_bar_chart(component_summary, "spend", "Spend", top_n=None), width="stretch")
@@ -5791,7 +5829,7 @@ def render_app():
             ]
         )
 
-    with tabs[5]:
+    with tabs[6]:
         st.subheader("Spend Pareto (ABC)")
         render_narrative_text(build_pareto_summary(spend_pareto, risk_pareto, strategic_pareto))
         st.caption("This visual shows which components account for most of total spend. The bars show each component's individual spend, and the line shows the cumulative share so you can see where the A, B, and C breakpoints occur. A-items are the small set of components driving the largest cumulative share of spend and should get the most commercial attention.")
@@ -5849,7 +5887,7 @@ def render_app():
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
         render_hover_hint()
 
-    with tabs[2]:
+    with tabs[3]:
         st.subheader("Risk Analysis")
         render_narrative_text(build_risk_analysis_summary(component_summary, supplier_risk_assessment))
         st.caption(
@@ -5889,7 +5927,7 @@ def render_app():
             )
             render_hover_hint()
 
-    with tabs[4]:
+    with tabs[5]:
         st.subheader("Supplier Scenarios")
         scenario_supplier_summary = base_analytics["supplier_summary"]
         scenario_component_supplier_detail = base_analytics["component_supplier_detail"]
@@ -6636,7 +6674,7 @@ def render_app():
             show_table(scenario_df)
         display_assumptions("Scenario assumptions", scenario_assumptions)
 
-    with tabs[6]:
+    with tabs[7]:
         st.subheader("Supplier Action Plans")
         render_narrative_text(
             "This is the working table for analysts and sourcing teams. It keeps the supplier-by-supplier reasoning and the more specific next step needed to validate or execute each recommendation."
@@ -6733,7 +6771,7 @@ def render_app():
         )
         show_table(step_plan)
 
-    with tabs[7]:
+    with tabs[8]:
         st.subheader("Executive Visuals & Downloads")
         render_narrative_text("Use a single decision pipeline to align spend prioritization, supply risk, supplier actions, and executive messaging.")
         bundle = make_download_bundle(
