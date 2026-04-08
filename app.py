@@ -3702,6 +3702,10 @@ def render_hover_hint(text: str = "Hover over the visual to see supplier, compon
     st.markdown(f'<div class="hover-hint">{html.escape(str(text))}</div>', unsafe_allow_html=True)
 
 
+def render_section_gap(height_px: int = 10) -> None:
+    st.markdown(f"<div style='height:{height_px}px'></div>", unsafe_allow_html=True)
+
+
 def build_estimated_savings_opportunity(executive_actions: pd.DataFrame, supplier_summary: pd.DataFrame) -> float:
     if not executive_actions.empty and "Estimated Savings" in executive_actions.columns:
         savings = pd.to_numeric(executive_actions["Estimated Savings"], errors="coerce").fillna(0.0)
@@ -4065,6 +4069,7 @@ def render_executive_dashboard(
         return
 
     render_kpi_cards(component_summary, supplier_summary)
+    render_section_gap(8)
     st.markdown('<div class="executive-section-title">Executive Summary</div>', unsafe_allow_html=True)
     executive_summary = build_executive_dashboard_summary(
         analytics,
@@ -4073,6 +4078,7 @@ def render_executive_dashboard(
         scenario_applied=scenario_applied,
     )
     render_narrative_text(executive_summary, class_name="executive-summary-card")
+    render_section_gap(10)
 
     st.caption("These visuals show where supplier risk, quality, and spend concentration intersect.")
     left_col, right_col = st.columns(2)
@@ -4088,6 +4094,8 @@ def render_executive_dashboard(
         st.caption("This chart shows how much spend sits in each supplier decision category and which suppliers drive the largest share of each bucket.")
         render_narrative_text(build_decision_mix_summary_text(supplier_summary))
 
+    render_section_gap(10)
+
     st.markdown('<div class="executive-section-title">Priority Supplier Actions</div>', unsafe_allow_html=True)
     st.caption("Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers.")
     priority_actions = build_priority_actions_table(supplier_summary, supplier_action_plan, executive_actions)
@@ -4095,16 +4103,18 @@ def render_executive_dashboard(
         st.info("No supplier action recommendations are available for the current view.")
     else:
         st.dataframe(
-            priority_actions.style.format(
-                {
-                    "Spend": "${:,.0f}",
-                    "Supplier Risk Score": "{:.1f}",
-                    "Estimated Savings": "${:,.0f}",
-                },
-                na_rep="",
-            ),
+            priority_actions,
             width="stretch",
             hide_index=True,
+            column_config={
+                "Supplier": st.column_config.TextColumn("Supplier", width="medium"),
+                "Spend": st.column_config.NumberColumn("Spend", format="$%d", width="small"),
+                "Supplier Risk Score": st.column_config.NumberColumn("Supplier Risk Score", format="%.1f", width="small"),
+                "Decision": st.column_config.TextColumn("Decision", width="medium"),
+                "Key Issues": st.column_config.TextColumn("Key Issues", width="medium"),
+                "Recommended Action": st.column_config.TextColumn("Recommended Action", width="large"),
+                "Estimated Savings": st.column_config.NumberColumn("Estimated Savings", format="$%d", width="small"),
+            },
         )
 
 

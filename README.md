@@ -2,7 +2,7 @@
 
 ## Overview
 
-Supplier Performance & Strategic Sourcing Dashboard is a Streamlit application built to turn messy procurement data into decision-ready supplier, risk, and sourcing insights. It is designed for procurement and supply chain teams that need to move quickly from raw Excel or CSV files to supplier actions, scenario comparisons, and executive-ready recommendations.
+Supplier Performance & Strategic Sourcing Dashboard is a Streamlit application built to turn messy procurement data into decision-ready supplier, risk, and sourcing insights. It is designed for procurement analysts, sourcing teams, and supply chain leaders who need to move quickly from raw Excel or CSV files to supplier actions, scenario comparisons, and executive-ready recommendations.
 
 ## Business Problem
 
@@ -87,3 +87,9 @@ python -m streamlit run app.py
 ## Why This Project Matters
 
 This project is more than a dashboard. It demonstrates how analytics, business logic, and product thinking can come together to support real procurement and supply chain decisions. It handles messy procurement inputs, turns them into supplier and component risk views, and produces recommendations that are useful for leadership conversations, sourcing reviews, and practical action planning.
+
+## Portfolio Context
+
+This project demonstrates the ability to turn messy real-world procurement data into structured analytics that support actual business decisions. It combines data normalization, business logic, dashboard design, and supply chain frameworks in one practical tool rather than treating them as separate exercises.
+
+From a portfolio perspective, it shows how to build decision-support products instead of static reports: the app ingests imperfect source data, applies supplier and sourcing logic, and presents the results in a format that is usable for executive reviews, analyst workflows, and scenario-driven planning.
