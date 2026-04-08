@@ -2,6 +2,7 @@ import html
 import io
 import itertools
 import math
+import re
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -287,6 +288,16 @@ ABC_CLASS_DOMAIN = ["A", "B", "C"]
 ABC_CLASS_RANGE = ["#1f4e79", "#7a5c99", "#8a6f42"]
 DECISION_DOMAIN = ["Eliminate / De-prioritize", "Keep and Monitor", "Keep / Consolidate To"]
 DECISION_RANGE = ["#d73027", "#f39c12", "#2e8b57"]
+SQL_EXAMPLE_QUERIES = {
+    "Procurement Data (sample)": "SELECT * FROM procurement_data LIMIT 1000",
+    "Supplier Performance Summary": "SELECT * FROM supplier_performance_summary",
+    "Component Risk Summary": "SELECT * FROM component_risk_summary",
+}
+READ_ONLY_SQL_PATTERN = re.compile(r"^\s*(SELECT|WITH)\b", flags=re.IGNORECASE)
+DISALLOWED_SQL_PATTERN = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|EXEC|MERGE|GRANT|REVOKE)\b",
+    flags=re.IGNORECASE,
+)
 
 
 def get_build_label() -> str:
@@ -544,6 +555,38 @@ def build_sample_data() -> pd.DataFrame:
     return normalize_input_data(sample_df)
 
 
+def process_loaded_frame(raw: pd.DataFrame, source_label: str) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
+    cleaned = cleanup_excel_frame(raw)
+    diagnostics = build_input_diagnostics(cleaned)
+    field_status = build_input_field_status(cleaned)
+    normalized = normalize_input_data(cleaned)
+    return normalized, source_label, diagnostics, field_status
+
+
+def validate_sql_query(query: str) -> str:
+    normalized_query = (query or "").strip()
+    if normalized_query.endswith(";"):
+        normalized_query = normalized_query[:-1].rstrip()
+    if not normalized_query:
+        raise ValueError("Enter a SQL query before loading data.")
+    if not READ_ONLY_SQL_PATTERN.match(normalized_query):
+        raise ValueError("Only read-only SELECT or WITH queries are allowed in SQL mode.")
+    if DISALLOWED_SQL_PATTERN.search(normalized_query):
+        raise ValueError("Only read-only SELECT or WITH queries are allowed in SQL mode.")
+    if ";" in normalized_query:
+        raise ValueError("Only a single read-only SELECT or WITH query is allowed in SQL mode.")
+    return normalized_query
+
+
+def describe_sql_query(query: str) -> str:
+    if query.strip().upper().startswith("WITH"):
+        return "CTE Query"
+    table_match = re.search(r"\bFROM\s+([A-Za-z0-9_.$\"]+)", query, flags=re.IGNORECASE)
+    if table_match:
+        return table_match.group(1).strip('"')
+    return "Query"
+
+
 @st.cache_data(show_spinner=False)
 def get_default_data() -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
     for dataset_path in DEFAULT_DATASET_CANDIDATES:
@@ -585,8 +628,27 @@ def load_uploaded_data(file_name: str, file_bytes: bytes) -> Tuple[pd.DataFrame,
         source_label = f"Loaded file: {file_name} | Worksheet: {best_sheet}"
     else:
         raise ValueError("Please upload a CSV or Excel file.")
-    cleaned = cleanup_excel_frame(raw)
-    return normalize_input_data(cleaned), source_label, build_input_diagnostics(cleaned), build_input_field_status(cleaned)
+    return process_loaded_frame(raw, source_label)
+
+
+@st.cache_data(show_spinner=False)
+def load_sql_data(query: str, source_name: str = "SQL Database") -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
+    validated_query = validate_sql_query(query)
+    conn = st.connection("sql", type="sql")
+    raw = conn.query(validated_query, ttl=0)
+    if raw.empty:
+        raise ValueError("The SQL query returned no rows.")
+    descriptor = describe_sql_query(validated_query)
+    source_label = f"Loaded source: {source_name} | {descriptor}"
+    return process_loaded_frame(raw, source_label)
+
+
+@st.cache_data(show_spinner=False)
+def preview_sql_data(query: str, preview_rows: int = 20) -> pd.DataFrame:
+    validated_query = validate_sql_query(query)
+    conn = st.connection("sql", type="sql")
+    raw = conn.query(validated_query, ttl=0)
+    return cleanup_excel_frame(raw).head(preview_rows)
 
 
 def assign_abc_categories(sorted_df: pd.DataFrame, value_col: str, prefix: str) -> pd.DataFrame:
@@ -5210,7 +5272,11 @@ def build_kraljic_positioning_summary(component_summary: pd.DataFrame) -> str:
     )
 
 
-def load_data(uploaded_file) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
+def load_data(data_source: str, uploaded_file, sql_query: Optional[str] = None) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
+    if data_source == "SQL Database":
+        if not sql_query:
+            return get_default_data()
+        return load_sql_data(sql_query)
     if uploaded_file is None:
         return get_default_data()
     return load_uploaded_data(uploaded_file.name, uploaded_file.getvalue())
@@ -5309,20 +5375,93 @@ def render_app():
         st.session_state["applied_scenario"] = None
     if "scenario_comparisons" not in st.session_state:
         st.session_state["scenario_comparisons"] = {}
+    if "selected_sql_example" not in st.session_state:
+        st.session_state["selected_sql_example"] = next(iter(SQL_EXAMPLE_QUERIES))
+    if "last_selected_sql_example" not in st.session_state:
+        st.session_state["last_selected_sql_example"] = st.session_state["selected_sql_example"]
+    if "sql_query_text" not in st.session_state:
+        st.session_state["sql_query_text"] = SQL_EXAMPLE_QUERIES[st.session_state["selected_sql_example"]]
+    if "active_sql_query" not in st.session_state:
+        st.session_state["active_sql_query"] = None
+    if "sql_mode_message" not in st.session_state:
+        st.session_state["sql_mode_message"] = None
 
     with st.sidebar:
         st.markdown("### Data Source")
-        uploaded_file = st.file_uploader("Upload procurement data", type=["csv", "xlsx", "xls"])
-        st.caption("Supports CSV and Excel files with messy or non-standard procurement fields.")
-        if uploaded_file is None:
-            st.info("Using built-in sample data until a file is uploaded.")
+        data_source = st.radio("Data Source", ["Upload File", "SQL Database"], key="data_source_mode")
+        uploaded_file = None
+        if data_source == "Upload File":
+            uploaded_file = st.file_uploader("Upload procurement data", type=["csv", "xlsx", "xls"])
+            st.caption("Supports CSV and Excel files with messy or non-standard procurement fields.")
+            if uploaded_file is None:
+                st.info("Using built-in sample data until a file is uploaded.")
+        else:
+            st.info(
+                "SQL input is intended for read-only procurement datasets. Results are normalized into the same analysis model as uploaded files."
+            )
+            selected_example = st.selectbox(
+                "Example query",
+                options=list(SQL_EXAMPLE_QUERIES.keys()),
+                key="selected_sql_example",
+            )
+            if st.session_state.get("last_selected_sql_example") != selected_example:
+                st.session_state["sql_query_text"] = SQL_EXAMPLE_QUERIES[selected_example]
+                st.session_state["last_selected_sql_example"] = selected_example
+            st.text_area(
+                "SQL query",
+                key="sql_query_text",
+                height=180,
+                help="Use a read-only SELECT or WITH query against your configured SQL connection.",
+            )
+            st.caption("Example schemas: procurement_data, supplier_performance_summary, component_risk_summary.")
+            if st.button("Test SQL Connection", use_container_width=True):
+                try:
+                    conn = st.connection("sql", type="sql")
+                    conn.query("SELECT 1", ttl=0)
+                    st.session_state["sql_mode_message"] = ("success", "SQL connection successful.")
+                except Exception:
+                    st.session_state["sql_mode_message"] = (
+                        "error",
+                        "Could not connect to the SQL database. Check secrets and connection settings.",
+                    )
+            if st.button("Load SQL Data", type="primary", use_container_width=True):
+                try:
+                    validated_query = validate_sql_query(st.session_state.get("sql_query_text", ""))
+                    st.session_state["active_sql_query"] = validated_query
+                    st.session_state["sql_mode_message"] = ("success", "SQL query loaded for analysis.")
+                except ValueError as exc:
+                    st.session_state["sql_mode_message"] = ("error", str(exc))
+            mode_message = st.session_state.get("sql_mode_message")
+            if isinstance(mode_message, tuple) and len(mode_message) == 2:
+                message_level, message_text = mode_message
+                if message_level == "success":
+                    st.success(message_text)
+                elif message_level == "warning":
+                    st.warning(message_text)
+                else:
+                    st.error(message_text)
 
     with st.spinner("Loading and analyzing supplier data..."):
         try:
-            normalized_df, data_source_label, input_diagnostics, input_field_status = load_data(uploaded_file)
+            normalized_df, data_source_label, input_diagnostics, input_field_status = load_data(
+                data_source,
+                uploaded_file,
+                st.session_state.get("active_sql_query"),
+            )
             base_analytics = build_analytics(normalized_df)
+            if data_source == "SQL Database" and st.session_state.get("active_sql_query"):
+                st.session_state["sql_mode_message"] = None
         except Exception as exc:
-            st.error(f"Unable to load file: {exc}")
+            if data_source == "SQL Database":
+                error_text = str(exc)
+                if "returned no rows" in error_text:
+                    st.warning("The SQL query returned no rows.")
+                elif "Only read-only SELECT or WITH queries are allowed" in error_text or "single read-only" in error_text or "Enter a SQL query" in error_text:
+                    st.error(error_text)
+                else:
+                    st.error("Could not connect to the SQL database. Check secrets and connection settings.")
+            else:
+                st.error(f"Unable to load file: {exc}")
             st.stop()
 
     previous_data_source_label = st.session_state.get("active_data_source_label")
@@ -5395,6 +5534,12 @@ def render_app():
 
     with st.sidebar:
         st.caption(f"Current source: {data_source_label}")
+        if data_source == "SQL Database" and st.session_state.get("active_sql_query"):
+            with st.expander("Preview Raw SQL Rows"):
+                try:
+                    st.dataframe(preview_sql_data(st.session_state["active_sql_query"]), width="stretch", hide_index=True)
+                except Exception:
+                    st.caption("Raw SQL preview is unavailable for the current query.")
     if scenario_state and applied_scenario_metrics is not None:
         st.info(
             "Applied scenario dashboard view: "
