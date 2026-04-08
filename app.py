@@ -199,6 +199,7 @@ ABC_CLASS_DOMAIN = ["A", "B", "C"]
 ABC_CLASS_RANGE = ["#1f4e79", "#7a5c99", "#8a6f42"]
 DECISION_DOMAIN = ["Eliminate / De-prioritize", "Keep and Monitor", "Keep / Consolidate To"]
 DECISION_RANGE = ["#d73027", "#f39c12", "#2e8b57"]
+APP_BUILD_LABEL = "Build: 2026-04-08 exec-dashboard-v2"
 
 
 COLUMN_ALIASES = {
@@ -3589,21 +3590,38 @@ def format_percent(value: float, decimals: int = 1) -> str:
     return f"{float(value):,.{decimals}%}"
 
 
+def weighted_average(values: pd.Series, weights: pd.Series) -> float:
+    safe_values = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    safe_weights = pd.to_numeric(weights, errors="coerce").fillna(0.0)
+    total_weight = float(safe_weights.sum())
+    if total_weight <= 0:
+        return float(safe_values.mean()) if not safe_values.empty else 0.0
+    return float((safe_values * safe_weights).sum() / total_weight)
+
+
 def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataFrame) -> None:
-    total_spend = float(supplier_summary["spend"].sum()) if not supplier_summary.empty else 0.0
+    total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns and not component_summary.empty else 0.0
     supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else 0
     component_count = int(component_summary["component"].nunique()) if "component" in component_summary.columns else 0
     single_source_count = int(component_summary["single_source_flag"].sum()) if "single_source_flag" in component_summary.columns else 0
-    avg_defect_rate = float(supplier_summary["defect_rate"].mean()) if "defect_rate" in supplier_summary.columns and not supplier_summary.empty else 0.0
-    avg_lead_time = float(supplier_summary["avg_lead_time"].mean()) if "avg_lead_time" in supplier_summary.columns and not supplier_summary.empty else 0.0
+    avg_defect_rate = (
+        weighted_average(supplier_summary["defect_rate"], supplier_summary["spend"])
+        if {"defect_rate", "spend"}.issubset(supplier_summary.columns) and not supplier_summary.empty
+        else 0.0
+    )
+    avg_lead_time = (
+        weighted_average(supplier_summary["avg_lead_time"], supplier_summary["spend"])
+        if {"avg_lead_time", "spend"}.issubset(supplier_summary.columns) and not supplier_summary.empty
+        else 0.0
+    )
 
     kpi_items = [
-        ("Total Spend", format_currency_compact(total_spend), "Modeled spend represented in the current portfolio view."),
-        ("Supplier Count", f"{supplier_count}", "Distinct suppliers currently represented in the supply base."),
-        ("Component Count", f"{component_count}", "Components or materials currently flowing through the portfolio."),
-        ("Single-Source Components", f"{single_source_count}", "Items still dependent on only one effective supplier."),
-        ("Average Defect Rate", format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate), "Average quality burden across suppliers in the current view."),
-        ("Average Lead Time", f"{avg_lead_time:,.1f} days", "Average replenishment time used in the current supplier profile."),
+        ("Total Spend", format_currency_compact(total_spend), "Portfolio spend represented in the current dashboard view."),
+        ("Supplier Count", f"{supplier_count}", "Distinct suppliers included in the active supply base."),
+        ("Component Count", f"{component_count}", "Components or materials currently covered in the portfolio."),
+        ("Single-Source Components", f"{single_source_count}", "Components still dependent on one effective supplier."),
+        ("Average Defect Rate", format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate), "Spend-weighted quality burden across active suppliers."),
+        ("Average Lead Time", f"{avg_lead_time:,.1f} days", "Spend-weighted replenishment time across active suppliers."),
     ]
 
     cols = st.columns(6)
@@ -3621,7 +3639,12 @@ def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataF
             )
 
 
-def build_executive_summary_text(analytics: Dict[str, pd.DataFrame], scenario_applied: bool = False) -> str:
+def build_executive_dashboard_summary(
+    analytics: Dict[str, pd.DataFrame],
+    executive_actions: pd.DataFrame,
+    summary_text: str = "",
+    scenario_applied: bool = False,
+) -> str:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
     if supplier_summary.empty or component_summary.empty:
@@ -3634,27 +3657,64 @@ def build_executive_summary_text(analytics: Dict[str, pd.DataFrame], scenario_ap
     exit_count = int(supplier_summary["decision"].eq("Eliminate / De-prioritize").sum())
     single_source_components = component_summary.loc[component_summary["single_source_flag"], "component"].astype(str).tolist()
     high_risk_components = component_summary.loc[component_summary["high_risk_flag"], "component"].astype(str).tolist()
-    next_focus = (
-        "confirm the applied supplier set, lock in mitigation assignments, and translate the decision into execution plans."
-        if scenario_applied
-        else "use the scenario workspace to test whether exposure can be reduced without giving up too much coverage or savings."
+    avg_defect_rate = (
+        weighted_average(supplier_summary["defect_rate"], supplier_summary["spend"])
+        if {"defect_rate", "spend"}.issubset(supplier_summary.columns)
+        else 0.0
+    )
+    avg_lead_time = (
+        weighted_average(supplier_summary["avg_lead_time"], supplier_summary["spend"])
+        if {"avg_lead_time", "spend"}.issubset(supplier_summary.columns)
+        else 0.0
+    )
+    highest_priority_action = ""
+    if not executive_actions.empty and "Supplier" in executive_actions.columns:
+        top_action_row = executive_actions.iloc[0]
+        action_supplier = str(top_action_row.get("Supplier", "")).strip()
+        action_text = str(top_action_row.get("Recommended Action", "")).strip()
+        if action_supplier:
+            highest_priority_action = (
+                f"The highest-priority supplier action currently centers on {action_supplier.lower()}, where the dashboard recommends {action_text.lower()}."
+                if action_text
+                else f"The highest-priority supplier action currently centers on {action_supplier.lower()}."
+            )
+
+    concentration_sentence = (
+        f"Spend is concentrated most heavily with {top_supplier['supplier']} at {format_currency_compact(top_supplier['spend'])}, while {top_component['component']} is the largest component category at {format_currency_compact(top_component['spend'])}."
+    )
+    decision_sentence = (
+        f"The current supplier portfolio points to {exit_count} suppliers that look most replaceable, {keep_count} suppliers that remain the strongest consolidation or retention candidates, and {monitor_count} suppliers that warrant ongoing oversight."
     )
     single_source_sentence = (
         f"Single-source exposure remains meaningful in {len(single_source_components)} components, led by {format_name_list(single_source_components, max_items=4)}."
         if single_source_components
-        else "No components are currently single-sourced in the active view, which reduces immediate continuity concentration."
+        else "No components are currently single-sourced in the active view, which materially reduces continuity concentration."
     )
-    high_risk_sentence = (
-        f"The most exposed components currently include {format_name_list(high_risk_components, max_items=4)}."
+    risk_sentence = (
+        f"Risk and performance pressure remain most visible in {format_name_list(high_risk_components, max_items=4)}, while the current supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
         if high_risk_components
-        else "No components are currently flagged high risk in the active view."
+        else f"Risk and performance pressure are comparatively contained, with the current supplier base running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
     )
-    return (
-        f"Spend is concentrated most heavily with {top_supplier['supplier']} at {format_currency_compact(top_supplier['spend'])}, while {top_component['component']} is the largest component category at {format_currency_compact(top_component['spend'])}. "
-        f"The current supplier portfolio points to {exit_count} suppliers that look most replaceable, {keep_count} suppliers that appear strongest for retention or consolidation, and {monitor_count} suppliers that warrant ongoing review. "
-        f"{single_source_sentence} "
-        f"{high_risk_sentence} "
-        f"The next leadership move is to {next_focus}"
+    next_focus = (
+        "Leadership should use this scenario-adjusted view to confirm the supplier set, lock mitigation assignments, and move the approved changes into execution."
+        if scenario_applied
+        else "Leadership should focus next on validating the exit and consolidation recommendations, then use scenario testing to reduce exposure without sacrificing too much coverage or savings."
+    )
+    sentences = [concentration_sentence, decision_sentence, single_source_sentence, risk_sentence]
+    if highest_priority_action:
+        sentences.append(highest_priority_action[:1].upper() + highest_priority_action[1:])
+    elif summary_text:
+        sentences.append("The broader portfolio narrative continues to reinforce the same sourcing priorities highlighted elsewhere in the dashboard.")
+    sentences.append(next_focus)
+    return " ".join(sentences[:6])
+
+
+def build_executive_summary_text(analytics: Dict[str, pd.DataFrame], scenario_applied: bool = False) -> str:
+    return build_executive_dashboard_summary(
+        analytics,
+        pd.DataFrame(),
+        summary_text="",
+        scenario_applied=scenario_applied,
     )
 
 
@@ -3674,7 +3734,6 @@ def build_priority_actions_table(
             ]
         )
 
-    action_lookup = supplier_action_plan.rename(columns={"Issues": "Key Issues", "Action Plan": "Recommended Action"})
     priority_frame = supplier_summary[
         ["supplier", "spend", "supplier_risk_score", "decision", "issues", "estimated_savings"]
     ].rename(
@@ -3687,20 +3746,43 @@ def build_priority_actions_table(
             "estimated_savings": "Estimated Savings",
         }
     )
-    if not action_lookup.empty:
+    if not supplier_action_plan.empty:
+        action_lookup = supplier_action_plan.rename(
+            columns={"Issues": "Key Issues", "Action Plan": "Recommended Action", "Estimated Savings": "Plan Savings"}
+        )
         priority_frame = priority_frame.merge(
-            action_lookup[["Supplier", "Recommended Action"]],
+            action_lookup[[col for col in ["Supplier", "Key Issues", "Recommended Action", "Plan Savings"] if col in action_lookup.columns]],
+            on="Supplier",
+            how="left",
+            suffixes=("", "_plan"),
+        )
+    if not executive_actions.empty:
+        priority_frame = priority_frame.merge(
+            executive_actions.rename(
+                columns={"Issues": "Executive Issues", "Action Plan": "Executive Action", "Estimated Savings": "Executive Savings"}
+            )[[col for col in ["Supplier", "Executive Issues", "Executive Action", "Executive Savings"] if col in executive_actions.columns]],
             on="Supplier",
             how="left",
         )
-    elif not executive_actions.empty:
-        priority_frame = priority_frame.merge(
-            executive_actions.rename(columns={"Action Plan": "Recommended Action"})[["Supplier", "Recommended Action"]],
-            on="Supplier",
-            how="left",
-        )
-    else:
+    if "Key Issues_plan" in priority_frame.columns:
+        priority_frame["Key Issues"] = priority_frame["Key Issues"].fillna(priority_frame["Key Issues_plan"])
+        priority_frame = priority_frame.drop(columns="Key Issues_plan")
+    if "Recommended Action" not in priority_frame.columns:
         priority_frame["Recommended Action"] = ""
+    if "Executive Action" in priority_frame.columns:
+        priority_frame["Recommended Action"] = priority_frame["Recommended Action"].fillna(priority_frame["Executive Action"])
+        priority_frame = priority_frame.drop(columns="Executive Action")
+    if "Executive Issues" in priority_frame.columns:
+        priority_frame["Key Issues"] = priority_frame["Key Issues"].fillna(priority_frame["Executive Issues"])
+        priority_frame = priority_frame.drop(columns="Executive Issues")
+    if "Plan Savings" in priority_frame.columns:
+        priority_frame["Estimated Savings"] = priority_frame["Estimated Savings"].fillna(priority_frame["Plan Savings"])
+        priority_frame = priority_frame.drop(columns="Plan Savings")
+    if "Executive Savings" in priority_frame.columns:
+        priority_frame["Estimated Savings"] = priority_frame["Estimated Savings"].fillna(priority_frame["Executive Savings"])
+        priority_frame = priority_frame.drop(columns="Executive Savings")
+    priority_frame["Recommended Action"] = priority_frame["Recommended Action"].fillna("Review the supplier position and convert the decision into an execution plan.")
+    priority_frame["Key Issues"] = priority_frame["Key Issues"].fillna("No material issues captured.")
 
     decision_priority = {
         "Eliminate / De-prioritize": 1,
@@ -3718,7 +3800,7 @@ def build_supplier_risk_scatter(supplier_summary: pd.DataFrame) -> alt.Chart:
     if supplier_summary.empty:
         return alt.Chart(pd.DataFrame({"message": ["No supplier data available for this view."]})).mark_text(
             size=16, color="#64748b"
-        ).encode(text="message:N").properties(height=320)
+        ).encode(text="message:N").properties(height=340)
 
     chart_data = supplier_summary.copy()
     color_scale = alt.Scale(domain=DECISION_DOMAIN, range=DECISION_RANGE)
@@ -3749,7 +3831,7 @@ def build_decision_mix_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
     if supplier_summary.empty:
         return alt.Chart(pd.DataFrame({"message": ["No supplier decisions available for this view."]})).mark_text(
             size=16, color="#64748b"
-        ).encode(text="message:N").properties(height=280)
+        ).encode(text="message:N").properties(height=300)
 
     chart_data = (
         supplier_summary.groupby("decision", as_index=False)["spend"].sum()
@@ -3778,39 +3860,58 @@ def render_executive_dashboard(
     analytics: Dict[str, pd.DataFrame],
     executive_actions: pd.DataFrame,
     supplier_action_plan: pd.DataFrame,
+    summary_text: str = "",
     scenario_applied: bool = False,
 ) -> None:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
+    st.subheader("Supplier Performance & Strategic Sourcing Dashboard")
+    st.caption("This dashboard turns uploaded procurement data into supplier risk, consolidation, and sourcing decisions.")
+    st.caption(APP_BUILD_LABEL)
+    if scenario_applied:
+        st.info("Scenario-adjusted dashboard view: metrics, actions, and visuals below reflect the currently applied scenario rather than the base portfolio.")
+
+    if supplier_summary.empty or component_summary.empty:
+        st.info("Upload procurement data to generate the executive dashboard summary, action priorities, and portfolio visuals.")
+        return
+
     render_kpi_cards(component_summary, supplier_summary)
     st.markdown('<div class="executive-section-title">Executive Summary</div>', unsafe_allow_html=True)
-    st.write(build_executive_summary_text(analytics, scenario_applied=scenario_applied))
-
-    st.markdown('<div class="executive-section-title">Priority Actions</div>', unsafe_allow_html=True)
-    st.caption("Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers.")
-    priority_actions = build_priority_actions_table(supplier_summary, supplier_action_plan, executive_actions)
-    st.dataframe(
-        priority_actions.style.format(
-            {
-                "Spend": "${:,.0f}",
-                "Supplier Risk Score": "{:.1f}",
-                "Estimated Savings": "${:,.0f}",
-            },
-            na_rep="",
-        ),
-        width="stretch",
-        hide_index=True,
+    st.write(
+        build_executive_dashboard_summary(
+            analytics,
+            executive_actions,
+            summary_text=summary_text,
+            scenario_applied=scenario_applied,
+        )
     )
 
-    top_chart_col, bottom_chart_col = st.columns(2)
-    with top_chart_col:
-        st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
-        st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
-        st.caption("Suppliers in the upper-right region combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure.")
-    with bottom_chart_col:
-        st.markdown('<div class="executive-section-title">Decision Mix by Supplier Spend</div>', unsafe_allow_html=True)
-        st.altair_chart(build_decision_mix_chart(supplier_summary), width="stretch")
-        st.caption("This view shows how much portfolio spend currently sits in each supplier decision category, helping leadership see where the largest sourcing moves are concentrated.")
+    st.markdown('<div class="executive-section-title">Priority Supplier Actions</div>', unsafe_allow_html=True)
+    st.caption("Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers.")
+    priority_actions = build_priority_actions_table(supplier_summary, supplier_action_plan, executive_actions)
+    if priority_actions.empty:
+        st.info("No supplier action recommendations are available for the current view.")
+    else:
+        st.dataframe(
+            priority_actions.style.format(
+                {
+                    "Spend": "${:,.0f}",
+                    "Supplier Risk Score": "{:.1f}",
+                    "Estimated Savings": "${:,.0f}",
+                },
+                na_rep="",
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+
+    st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
+    st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
+    st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure.")
+
+    st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
+    st.altair_chart(build_decision_mix_chart(supplier_summary), width="stretch")
+    st.caption("This chart shows how much supplier spend currently sits in each decision category, helping leadership see where the largest sourcing moves are concentrated.")
 
 
 def display_assumptions(title: str, assumptions: List[str]):
@@ -4459,6 +4560,7 @@ def build_scenario_compare_table(current_snapshot: Dict[str, object], saved_snap
 def render_app():
     st.title("Supplier Performance & Strategic Sourcing Dashboard")
     st.caption("Prioritize supplier risk, consolidation, and sourcing actions from uploaded procurement data.")
+    st.caption(APP_BUILD_LABEL)
     if "persisted_scenario_state" not in st.session_state:
         st.session_state["persisted_scenario_state"] = load_persisted_scenario_state()
     if "applied_scenario" not in st.session_state:
@@ -4587,6 +4689,7 @@ def render_app():
             analytics,
             executive_actions,
             supplier_action_plan,
+            summary_text=summary_text,
             scenario_applied=scenario_applied,
         )
 
