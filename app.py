@@ -3812,11 +3812,7 @@ def build_supplier_risk_scatter(supplier_summary: pd.DataFrame) -> alt.Chart:
 
     chart_data = supplier_summary.copy()
     color_scale = alt.Scale(domain=DECISION_DOMAIN, range=DECISION_RANGE)
-    label_count = min(8, len(chart_data))
-    label_data = chart_data.sort_values("spend", ascending=False).head(label_count).copy()
-    label_data["label_y"] = label_data["defect_rate"] + max(float(chart_data["defect_rate"].max()) * 0.02, 0.15)
-
-    bubbles = (
+    return (
         alt.Chart(chart_data)
         .mark_circle(opacity=0.8, stroke="#ffffff", strokeWidth=1.2)
         .encode(
@@ -3833,25 +3829,6 @@ def build_supplier_risk_scatter(supplier_summary: pd.DataFrame) -> alt.Chart:
                 alt.Tooltip("decision:N", title="Decision"),
             ],
         )
-    )
-    labels = (
-        alt.Chart(label_data)
-        .mark_text(
-            dy=-10,
-            fontSize=11,
-            fontWeight="bold",
-            color="#1f2937",
-            stroke="#ffffff",
-            strokeWidth=2,
-        )
-        .encode(
-            x=alt.X("avg_lead_time:Q"),
-            y=alt.Y("label_y:Q"),
-            text=alt.Text("supplier:N"),
-        )
-    )
-    return (
-        (bubbles + labels)
         .properties(height=380)
         .configure_axis(labelFontSize=11, titleFontSize=13)
         .configure_legend(labelFontSize=11, titleFontSize=12)
@@ -3865,33 +3842,54 @@ def build_decision_mix_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
         ).encode(text="message:N").properties(height=300)
 
     chart_data = (
-        supplier_summary.groupby("decision", as_index=False)["spend"].sum()
-        .assign(decision_order=lambda df: df["decision"].map({name: idx for idx, name in enumerate(DECISION_DOMAIN, start=1)}))
-        .assign(spend_label=lambda df: df["spend"].map(format_currency_compact))
-        .sort_values("decision_order")
+        supplier_summary.groupby(["decision", "supplier"], as_index=False)["spend"].sum()
+        .assign(
+            decision_order=lambda df: df["decision"].map({name: idx for idx, name in enumerate(DECISION_DOMAIN, start=1)})
+        )
+        .sort_values(["decision_order", "spend"], ascending=[True, False])
     )
+    chart_data["decision_total_spend"] = chart_data.groupby("decision")["spend"].transform("sum")
+    chart_data["supplier_share"] = np.where(
+        chart_data["decision_total_spend"] > 0,
+        chart_data["spend"] / chart_data["decision_total_spend"],
+        0.0,
+    )
+    chart_data["rank_within_decision"] = chart_data.groupby("decision")["spend"].rank(method="first", ascending=False)
+
     bars = (
         alt.Chart(chart_data)
-        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, stroke="#ffffff", strokeWidth=1)
         .encode(
             x=alt.X("decision:N", title="Supplier Decision", sort=DECISION_DOMAIN, axis=alt.Axis(labelAngle=0, labelLimit=220)),
             y=alt.Y("spend:Q", title="Spend"),
             color=alt.Color("decision:N", title="Decision", scale=alt.Scale(domain=DECISION_DOMAIN, range=DECISION_RANGE)),
+            detail=alt.Detail("supplier:N"),
             tooltip=[
                 alt.Tooltip("decision:N", title="Decision"),
+                alt.Tooltip("supplier:N", title="Supplier"),
                 alt.Tooltip("spend:Q", title="Spend", format="$,.0f"),
+                alt.Tooltip("supplier_share:Q", title="Share of Decision Spend", format=".0%"),
             ],
         )
     )
+
+    label_data = chart_data.loc[(chart_data["rank_within_decision"] <= 2) & (chart_data["supplier_share"] >= 0.18)].copy()
     labels = (
-        alt.Chart(chart_data)
-        .mark_text(dy=-10, fontSize=12, fontWeight="bold", color="#1f2937")
+        alt.Chart(label_data)
+        .mark_text(
+            fontSize=11,
+            fontWeight="bold",
+            color="white",
+            lineBreak="\n",
+        )
         .encode(
             x=alt.X("decision:N", sort=DECISION_DOMAIN),
-            y=alt.Y("spend:Q"),
-            text=alt.Text("spend_label:N"),
+            y=alt.Y("spend:Q", stack="center"),
+            detail=alt.Detail("supplier:N"),
+            text=alt.Text("supplier:N"),
         )
     )
+
     return (
         (bars + labels)
         .properties(height=320)
