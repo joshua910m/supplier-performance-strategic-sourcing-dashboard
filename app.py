@@ -5491,7 +5491,7 @@ def render_app():
     if "sql_mode_message" not in st.session_state:
         st.session_state["sql_mode_message"] = None
     if "sql_connection_mode" not in st.session_state:
-        st.session_state["sql_connection_mode"] = "Bundled SQL Example"
+        st.session_state["sql_connection_mode"] = "Choose SQL Connection Source"
 
     with st.sidebar:
         st.markdown("### Data Source")
@@ -5506,58 +5506,61 @@ def render_app():
             st.info(
                 "SQL input is intended for read-only procurement datasets. Results are normalized into the same analysis model as uploaded files."
             )
-            sql_connection_options = ["Bundled SQL Example"]
+            sql_connection_options = ["Choose SQL Connection Source", "Bundled SQL Example"]
             if has_configured_sql_connection():
                 sql_connection_options.append("Configured SQL Connection")
             elif st.session_state.get("sql_connection_mode") == "Configured SQL Connection":
                 st.session_state["sql_connection_mode"] = "Bundled SQL Example"
-            sql_connection_mode = st.radio(
+            sql_connection_mode = st.selectbox(
                 "SQL Connection Source",
                 sql_connection_options,
                 key="sql_connection_mode",
             )
-            if sql_connection_mode == "Bundled SQL Example":
+            if sql_connection_mode == "Choose SQL Connection Source":
+                st.caption("Choose a SQL source to enable the query editor and load controls.")
+            elif sql_connection_mode == "Bundled SQL Example":
                 ensure_default_sqlite_database()
                 st.caption("Uses the bundled local SQLite sample database included with the app.")
             else:
                 st.caption("Uses the configured `connections.sql` database from `.streamlit/secrets.toml`.")
-            selected_example = st.selectbox(
-                "Example query",
-                options=list(SQL_EXAMPLE_QUERIES.keys()),
-                key="selected_sql_example",
-            )
-            reset_example_query = st.button("Reset Query To Selected Example", use_container_width=True)
-            current_query_text = str(st.session_state.get("sql_query_text", ""))
-            if reset_example_query or st.session_state.get("last_selected_sql_example") != selected_example or not current_query_text.strip():
-                current_query_text = SQL_EXAMPLE_QUERIES[selected_example]
+            if sql_connection_mode != "Choose SQL Connection Source":
+                selected_example = st.selectbox(
+                    "Example query",
+                    options=list(SQL_EXAMPLE_QUERIES.keys()),
+                    key="selected_sql_example",
+                )
+                reset_example_query = st.button("Reset Query To Selected Example", use_container_width=True)
+                current_query_text = str(st.session_state.get("sql_query_text", ""))
+                if reset_example_query or st.session_state.get("last_selected_sql_example") != selected_example or not current_query_text.strip():
+                    current_query_text = SQL_EXAMPLE_QUERIES[selected_example]
+                    st.session_state["sql_query_text"] = current_query_text
+                    st.session_state["last_selected_sql_example"] = selected_example
+                current_query_text = st.text_area(
+                    "SQL query",
+                    value=current_query_text,
+                    height=180,
+                    help="Use a read-only SELECT or WITH query against your configured SQL connection.",
+                )
                 st.session_state["sql_query_text"] = current_query_text
-                st.session_state["last_selected_sql_example"] = selected_example
-            current_query_text = st.text_area(
-                "SQL query",
-                value=current_query_text,
-                height=180,
-                help="Use a read-only SELECT or WITH query against your configured SQL connection.",
-            )
-            st.session_state["sql_query_text"] = current_query_text
-            st.caption("Example schemas: procurement_data, supplier_performance_summary, component_risk_summary.")
-            if st.button("Test SQL Connection", use_container_width=True):
-                try:
-                    conn = get_sql_connection(sql_connection_mode)
-                    conn.query("SELECT 1", ttl=0)
-                    st.session_state["sql_mode_message"] = ("success", "SQL connection successful.")
-                except Exception:
-                    st.session_state["sql_mode_message"] = (
-                        "error",
-                        "Could not connect to the SQL database. Check secrets and connection settings.",
-                    )
-            if st.button("Load SQL Data", type="primary", use_container_width=True):
-                try:
-                    validated_query = validate_sql_query(st.session_state.get("sql_query_text", ""))
-                    st.session_state["sql_query_text"] = validated_query
-                    st.session_state["active_sql_query"] = validated_query
-                    st.session_state["sql_mode_message"] = ("success", "SQL query loaded for analysis.")
-                except ValueError as exc:
-                    st.session_state["sql_mode_message"] = ("error", str(exc))
+                st.caption("Example schemas: procurement_data, supplier_performance_summary, component_risk_summary.")
+                if st.button("Test SQL Connection", use_container_width=True):
+                    try:
+                        conn = get_sql_connection(sql_connection_mode)
+                        conn.query("SELECT 1", ttl=0)
+                        st.session_state["sql_mode_message"] = ("success", "SQL connection successful.")
+                    except Exception:
+                        st.session_state["sql_mode_message"] = (
+                            "error",
+                            "Could not connect to the SQL database. Check secrets and connection settings.",
+                        )
+                if st.button("Load SQL Data", type="primary", use_container_width=True):
+                    try:
+                        validated_query = validate_sql_query(st.session_state.get("sql_query_text", ""))
+                        st.session_state["sql_query_text"] = validated_query
+                        st.session_state["active_sql_query"] = validated_query
+                        st.session_state["sql_mode_message"] = ("success", "SQL query loaded for analysis.")
+                    except ValueError as exc:
+                        st.session_state["sql_mode_message"] = ("error", str(exc))
             mode_message = st.session_state.get("sql_mode_message")
             if isinstance(mode_message, tuple) and len(mode_message) == 2:
                 message_level, message_text = mode_message
