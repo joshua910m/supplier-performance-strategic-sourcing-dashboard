@@ -5198,7 +5198,7 @@ def render_app():
         if isinstance(pending_widget_updates, dict):
             for key, values in pending_widget_updates.items():
                 st.session_state[key] = list(values)
-        st.caption(
+        render_narrative_text(
             "Base-model keep recommendations: "
             + (", ".join(recommended_keep_suppliers) if recommended_keep_suppliers else "none identified")
         )
@@ -5309,20 +5309,20 @@ def render_app():
             recommended_selected_tuple = tuple(sorted(recommended_supplier_list))
             if current_selected_tuple == recommended_selected_tuple:
                 st.success("Your current selected supplier set matches the model's recommended scenario.")
-            st.info(
+            render_narrative_text(
                 f"{recommendation_state.get('optimization_objective', optimization_objective)} recommendation: score {recommendation_state.get('score', 0.0):,.1f}, {len(recommended_supplier_list)} suppliers, "
                 f"{recommendation_state.get('covered_spend_share', 0.0):.0%} spend coverage, "
                 f"{recommendation_state.get('high_risk_components', 0)} high-risk components, {recommendation_state.get('uncovered_components', 0)} uncovered components, "
                 f"and ${recommendation_state.get('net_savings', recommendation_state.get('estimated_savings', 0.0)):,.0f} net savings."
             )
-            st.caption(
+            render_narrative_text(
                 "Recommended suppliers: "
                 + (", ".join(recommended_supplier_list) if recommended_supplier_list else "none")
                 + ". Mitigation assignments: "
                 + (", ".join(recommended_mitigation_list) if recommended_mitigation_list else "none needed")
                 + "."
             )
-            st.caption(
+            render_narrative_text(
                 f"Scenario engine reviewed {recommendation_state.get('tested_scenarios', 0)} candidate combinations across supplier counts. "
                 + str(recommendation_state.get("rationale", ""))
             )
@@ -5622,8 +5622,8 @@ def render_app():
                 else "0.0"
             ),
         )
-        st.caption(
-            f"Current scenario score under `{optimization_objective}` is {current_scorecard.get('score', 0.0):,.1f}."
+        render_narrative_text(
+            f"Current scenario score under {optimization_objective} is {current_scorecard.get('score', 0.0):,.1f}."
         )
         with st.expander("Current Scenario Score Breakdown"):
             breakdown = current_scorecard.get("breakdown", pd.DataFrame())
@@ -5677,7 +5677,7 @@ def render_app():
 
         if saved_snapshots:
             st.subheader("Scenario Comparison")
-            st.caption("Compare the current evaluated scenario against up to four saved scenarios for this dataset.")
+            render_narrative_text("Compare the current evaluated scenario against up to four saved scenarios for this dataset.")
             comparison_table = build_scenario_compare_table(current_snapshot, saved_snapshots)
             st.table(comparison_table.set_index("Metric"))
             comparison_columns = st.columns(min(len(saved_snapshots) + 1, 3))
@@ -5696,36 +5696,36 @@ def render_app():
                     )
             if len(saved_snapshots) > 2:
                 overflow_labels = ", ".join(str(snapshot.get("label", "Scenario")) for snapshot in saved_snapshots[2:])
-                st.caption(f"Additional saved comparisons: {overflow_labels}. They are included in the comparison table above.")
+                render_narrative_text(f"Additional saved comparisons: {overflow_labels}. They are included in the comparison table above.")
 
-        st.caption(
+        render_narrative_text(
             "Existing single-source issues fixed: "
             + (", ".join(resolved_single_source_names) if resolved_single_source_names else "none")
         )
-        st.caption(
+        render_narrative_text(
             "Existing single-source issues still present: "
             + (", ".join(remaining_single_source_names) if remaining_single_source_names else "none")
         )
-        st.caption(
+        render_narrative_text(
             "New single-source issues introduced: "
             + (", ".join(new_single_source_names) if new_single_source_names else "none")
         )
-        st.caption(
+        render_narrative_text(
             "Mitigated uncovered components: "
             + (", ".join(mitigated_uncovered_names) if mitigated_uncovered_names else "none")
         )
-        st.caption(
+        render_narrative_text(
             "Uncovered components remaining: "
             + (", ".join(uncovered_component_names) if uncovered_component_names else "none")
         )
-        st.caption(
+        render_narrative_text(
             f"Modeled mitigation cost: ${scenario_metrics['mitigation_cost']:,.0f}. "
             f"Net savings after mitigation: ${scenario_metrics['net_savings']:,.0f}. "
             f"Aggregate scenario risk reduction from mitigation: {scenario_metrics['aggregate_risk_reduction']:.1f} points."
         )
 
         if not scenario_df.empty:
-            st.caption("This visual shows how the evaluated scenario changes component coverage and risk at the same time. Components colored high or uncovered remain the priority constraints, while changes in spend coverage and supplier count show where the scenario improves or worsens resilience.")
+            render_narrative_text("This visual shows how the evaluated scenario changes component coverage and risk at the same time. Components colored high or uncovered remain the priority constraints, while changes in spend coverage and supplier count show where the scenario improves or worsens resilience.")
             scenario_chart = (
                 alt.Chart(scenario_df)
                 .mark_bar()
