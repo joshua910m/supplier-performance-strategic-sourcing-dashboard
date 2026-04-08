@@ -5695,7 +5695,7 @@ def render_app():
             f"{applied_scenario_metrics['covered_spend_share']:.0%} covered spend, "
             f"and {applied_high_risk_count} high-risk components."
         )
-        if st.button("Revert To Original Data", type="secondary"):
+        if st.button("Reset To Original Data", type="secondary"):
             st.session_state["applied_scenario"] = None
             save_persisted_scenario_state(
                 {
@@ -6009,7 +6009,7 @@ def render_app():
             recommended_keep_suppliers[:default_count] if recommended_keep_suppliers else all_supplier_options[:default_count]
         )
         default_selected_suppliers = [supplier for supplier in default_selected_suppliers if supplier in all_supplier_options]
-        if st.session_state.pop("pending_revert_to_base_scenario", False):
+        if st.session_state.pop("pending_reset_to_original_scenario", False):
             st.session_state["applied_scenario"] = None
             st.session_state["scenario_builder"] = {}
             st.session_state["scenario_selected_suppliers"] = base_selected_suppliers
@@ -6399,8 +6399,8 @@ def render_app():
             st.caption("After evaluation, either reset the exercise or apply the evaluated scenario to the dashboard.")
             action_left, action_right = st.columns(2)
             with action_left:
-                if st.button("Revert To Base Scenario", type="secondary", use_container_width=True):
-                    st.session_state["pending_revert_to_base_scenario"] = True
+                if st.button("Reset To Original Scenario", type="secondary", use_container_width=True):
+                    st.session_state["pending_reset_to_original_scenario"] = True
                     st.rerun()
             with action_right:
                 if st.button("Apply Scenario To Dashboard", type="primary", disabled=not has_evaluated_builder):
