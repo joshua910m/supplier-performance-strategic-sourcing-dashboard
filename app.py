@@ -3851,8 +3851,14 @@ def build_priority_actions_table(
     supplier_action_plan: pd.DataFrame,
     executive_actions: pd.DataFrame,
     scenario_applied: bool = False,
+    action_supplier_summary: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
-    if supplier_summary.empty:
+    source_supplier_summary = (
+        action_supplier_summary.copy()
+        if scenario_applied and action_supplier_summary is not None and not action_supplier_summary.empty
+        else supplier_summary.copy()
+    )
+    if source_supplier_summary.empty:
         return pd.DataFrame(
             columns=[
                 "Supplier",
@@ -3865,7 +3871,7 @@ def build_priority_actions_table(
             ]
         )
 
-    priority_frame = supplier_summary[
+    priority_frame = source_supplier_summary[
         ["supplier", "spend", "supplier_risk_score", "decision", "issues", "estimated_savings"]
     ].rename(
         columns={
@@ -4069,6 +4075,7 @@ def render_executive_dashboard(
     supplier_action_plan: pd.DataFrame,
     summary_text: str = "",
     scenario_applied: bool = False,
+    action_supplier_summary: Optional[pd.DataFrame] = None,
 ) -> None:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
@@ -4125,6 +4132,7 @@ def render_executive_dashboard(
         supplier_action_plan,
         executive_actions,
         scenario_applied=scenario_applied,
+        action_supplier_summary=action_supplier_summary,
     )
     if priority_actions.empty:
         st.info("No supplier action recommendations are available for the current view.")
@@ -4928,6 +4936,7 @@ def render_app():
             supplier_action_plan,
             summary_text=summary_text,
             scenario_applied=scenario_applied,
+            action_supplier_summary=applied_plan_analytics["supplier_summary"] if scenario_applied else None,
         )
 
     with tabs[1]:
