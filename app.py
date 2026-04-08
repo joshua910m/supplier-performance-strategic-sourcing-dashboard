@@ -3218,6 +3218,7 @@ def build_post_scenario_negotiation_plan(
     leverage_frame["supplier_risk_score"] = pd.to_numeric(leverage_frame.get("supplier_risk_score", 0.0), errors="coerce").fillna(0.0)
     leverage_frame["spend_gain"] = (leverage_frame["scenario_spend"] - leverage_frame["base_spend"]).clip(lower=0.0)
     leverage_frame["share_gain"] = (leverage_frame["scenario_portfolio_share"] - leverage_frame["base_portfolio_share"]).clip(lower=0.0)
+    leverage_frame["share_gain_points"] = leverage_frame["share_gain"] * 100.0
     leverage_frame["competition_depth"] = (leverage_frame["avg_component_supplier_count"] - 1.0).clip(lower=0.0)
     leverage_frame["low_risk_factor"] = (100.0 - leverage_frame["supplier_risk_score"]).clip(lower=0.0, upper=100.0)
 
@@ -3303,7 +3304,7 @@ def build_post_scenario_negotiation_plan(
             "scenario_role": "Scenario Role",
             "scenario_spend": "Scenario Spend",
             "spend_gain": "Spend Change",
-            "share_gain": "Portfolio Share Change",
+            "share_gain_points": "Portfolio Share Change",
             "negotiation_leverage_score": "Negotiation Leverage Score",
         }
     )[
@@ -5912,7 +5913,7 @@ def render_app():
                     "Scenario Role": st.column_config.TextColumn("Scenario Role", width="small"),
                     "Scenario Spend": st.column_config.NumberColumn("Scenario Spend", format="$%d", width="small"),
                     "Spend Change": st.column_config.NumberColumn("Spend Change", format="$%d", width="small"),
-                    "Portfolio Share Change": st.column_config.NumberColumn("Portfolio Share Change", format="%.1f%%", width="small"),
+                    "Portfolio Share Change": st.column_config.NumberColumn("Portfolio Share Change (pts)", format="%.1f", width="small"),
                     "Negotiation Leverage Score": st.column_config.NumberColumn("Negotiation Leverage Score", format="%.1f", width="small"),
                     "Potential Price Reduction": st.column_config.TextColumn("Potential Price Reduction", width="small"),
                     "Potential Incremental Savings": st.column_config.NumberColumn("Potential Incremental Savings", format="$%d", width="small"),
