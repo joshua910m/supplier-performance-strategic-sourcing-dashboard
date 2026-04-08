@@ -3829,8 +3829,11 @@ def build_executive_dashboard_summary(
     next_focus = (
         "We should confirm the applied supplier set, lock mitigation assignments, and move the approved changes into execution."
         if scenario_applied
-        else f"We should next validate the proposed exit and consolidation moves, then use scenario analysis to {top_action_text.lower()}." if top_action_text
-        else "We should next validate the proposed exit and consolidation moves, then use scenario analysis to reduce exposure without giving up too much coverage or savings."
+        else (
+            "We should next use the Scenario Analysis tab to test supplier exits, consolidation moves, single-source mitigation, and other actions that reduce high-risk exposure, excess supplier count, and structural supply gaps without giving up too much coverage or savings."
+            if not top_action_text
+            else f"We should next use the Scenario Analysis tab to validate the proposed exit and consolidation moves, address single-source and high-risk exposure, and {top_action_text.lower()}."
+        )
     )
     return " ".join([concentration_sentence, single_source_sentence, decision_sentence, risk_sentence, savings_sentence, next_focus])
 
