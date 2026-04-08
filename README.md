@@ -23,6 +23,7 @@ This application ingests messy Excel and CSV procurement files, normalizes the f
 - Decision Mix by Spend view to show how supplier spend is distributed across decision categories
 - Priority supplier action recommendations with issues, actions, and savings
 - Scenario analysis for supplier consolidation, mitigation, and tradeoff testing
+- Post-scenario negotiation leverage modeling to identify where award concentration may support price, service, or lead-time improvements
 - Strategic sourcing, risk, and action-planning views for follow-through
 
 ## Tech Stack
@@ -40,7 +41,7 @@ This application ingests messy Excel and CSV procurement files, normalizes the f
 2. Normalize messy or inconsistent fields into a common data model.
 3. Compute supplier, component, concentration, and risk analytics.
 4. Classify supplier actions and highlight sourcing priorities.
-5. Explore scenario alternatives and review decision-ready outputs.
+5. Explore scenario alternatives, review negotiation leverage, and evaluate decision-ready outputs.
 
 ## Example Use Cases
 
