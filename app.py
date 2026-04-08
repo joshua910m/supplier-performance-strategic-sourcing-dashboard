@@ -2,6 +2,7 @@ import io
 import itertools
 import math
 import textwrap
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -199,7 +200,14 @@ ABC_CLASS_DOMAIN = ["A", "B", "C"]
 ABC_CLASS_RANGE = ["#1f4e79", "#7a5c99", "#8a6f42"]
 DECISION_DOMAIN = ["Eliminate / De-prioritize", "Keep and Monitor", "Keep / Consolidate To"]
 DECISION_RANGE = ["#d73027", "#f39c12", "#2e8b57"]
-APP_BUILD_LABEL = "Build: 2026-04-08 exec-dashboard-v2"
+
+
+def get_build_label() -> str:
+    build_timestamp = datetime.fromtimestamp(Path(__file__).stat().st_mtime)
+    return f"Build: {build_timestamp.strftime('%Y-%m-%d %I:%M %p')} CT"
+
+
+APP_BUILD_LABEL = get_build_label()
 
 
 COLUMN_ALIASES = {
