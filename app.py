@@ -17,6 +17,16 @@ st.set_page_config(page_title="Supplier Performance & Strategic Sourcing Dashboa
 st.markdown(
     """
     <style>
+    @keyframes scenarioPulse {
+        0%, 100% {
+            box-shadow: 0 0 0 rgba(255, 255, 255, 0.0);
+            transform: translateY(0);
+        }
+        50% {
+            box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.14);
+            transform: translateY(-1px);
+        }
+    }
     div[role="tablist"] > button[role="tab"],
     [data-baseweb="tab-list"] button[role="tab"] {
         color: #ffffff !important;
@@ -76,6 +86,11 @@ st.markdown(
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) {
         background: #b91c1c !important;
         border-color: #b91c1c !important;
+        animation: scenarioPulse 1.8s ease-in-out infinite;
+    }
+    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"],
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] {
+        animation: none !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(6),
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6) {
@@ -3638,6 +3653,10 @@ def render_narrative_text(text: str, class_name: str = "narrative-text") -> None
     st.markdown(f'<div class="{class_name}">{html.escape(str(text))}</div>', unsafe_allow_html=True)
 
 
+def render_hover_hint(text: str = "Hover over the visual to see supplier, component, spend, risk, and decision details.") -> None:
+    st.caption(text)
+
+
 def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataFrame) -> None:
     total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns and not component_summary.empty else 0.0
     supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else 0
@@ -4056,6 +4075,7 @@ def render_executive_dashboard(
 
     st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
     st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
+    render_hover_hint()
     st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure. Bubble color shows the current supplier decision recommendation.")
 
     st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
@@ -4885,9 +4905,11 @@ def render_app():
         st.subheader("Supplier Spend Analysis")
         render_narrative_text(build_supplier_spend_summary(supplier_summary, component_summary))
         st.altair_chart(build_supplier_metric_chart(supplier_summary, "spend", "Spend"), width="stretch")
+        render_hover_hint()
         st.subheader("Supplier Decision Overview")
         st.caption("This view shows how supplier spend aligns to the current decision model so leaders can see where the largest keep, monitor, and exit calls sit.")
         st.altair_chart(build_strategic_outcomes_chart(supplier_summary, scenario_applied=scenario_applied), width="stretch")
+        render_hover_hint()
         show_table(
             supplier_summary[["supplier", "spend", "component_count", "defect_rate", "avg_lead_time", "supplier_risk_score", "decision"]].rename(
                 columns={"supplier_risk_score": "Supplier Risk Score"}
@@ -4898,14 +4920,17 @@ def render_app():
         st.subheader("Component Spend Analysis")
         render_narrative_text(build_component_spend_summary(component_summary))
         st.altair_chart(build_component_risk_bar_chart(component_summary, "spend", "Spend", top_n=None), width="stretch")
+        render_hover_hint()
         st.subheader("Component Analysis")
         render_narrative_text(build_component_analysis_summary(component_summary))
         st.caption("Bubble size shows strategic priority, color shows sourcing risk, and red bubbles highlight single-source components.")
         st.altair_chart(build_component_analysis_bubble_chart(component_summary), width="stretch")
+        render_hover_hint()
         st.subheader("Component-Supplier Detail")
         render_narrative_text(build_component_supplier_detail_summary(component_supplier_detail))
         st.caption("This visual shows how each component's effective supply coverage is split across its suppliers. In an applied scenario, mitigation suppliers count toward the visible coverage share even if current awarded spend has not shifted yet. Longer single-color bars indicate concentrated coverage, while more segmented bars indicate broader backup depth.")
         st.altair_chart(build_component_supplier_detail_chart(component_supplier_detail, top_n=None), width="stretch")
+        render_hover_hint()
         show_table(
             component_summary[
                 [
@@ -4954,6 +4979,7 @@ def render_app():
             build_pareto_chart(spend_pareto, "component", "spend", "spend_cum_share", "spend_abc", "Component", "Spend"),
             width="stretch",
         )
+        render_hover_hint()
         show_table(spend_pareto[["component", "spend", "spend_cum_share", "spend_abc"]])
 
         st.subheader("Risk-Adjusted Pareto")
@@ -4975,6 +5001,7 @@ def render_app():
             ),
             width="stretch",
         )
+        render_hover_hint()
         show_table(
             risk_pareto[["component", "sourcing_risk_level", "risk_adjusted_spend", "defect_rate", "single_source_flag", "supply_risk_score", "risk_cum_share", "risk_abc"]],
         )
@@ -4993,12 +5020,14 @@ def render_app():
             ),
             width="stretch",
         )
+        render_hover_hint()
         show_table(
             strategic_pareto[["component", "strategic_priority_score", "strategic_cum_share", "strategic_abc"]],
         )
         st.subheader("Pareto 4 Quadrant Chart")
         st.caption("This visual combines supply risk and profit impact so each component can be interpreted through the Kraljic lens. The upper-right Strategic area contains the components where continuity planning and executive supplier management matter most.")
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
+        render_hover_hint()
 
     with tabs[2]:
         st.subheader("Risk Analysis")
@@ -5009,6 +5038,7 @@ def render_app():
             + build_risk_score_methodology_note()
         )
         st.altair_chart(build_component_risk_bar_chart(component_summary, "supply_risk_score", "Supply Risk Score"), width="stretch")
+        render_hover_hint()
         show_table(
             component_summary[
                 ["component", "supply_risk_score", "defect_rate", "avg_lead_time", "risk_score", "criticality", "single_source_flag", "high_risk_flag"]
@@ -5018,6 +5048,7 @@ def render_app():
         render_narrative_text(build_kraljic_positioning_summary(component_summary))
         st.caption(build_risk_score_methodology_note())
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
+        render_hover_hint()
         show_table(
             component_summary[
                 ["component", "supplier_count", "sourcing_risk_level", "supply_risk_score", "profit_impact_score", "kraljic_quadrant"]
@@ -5029,12 +5060,14 @@ def render_app():
         with left:
             st.caption("This visual shows the largest-supplier share for each component so concentration risk is easy to spot. Components with bars extending farthest to the right have the highest concentration and are the most exposed to supplier disruption.")
             st.altair_chart(build_supplier_concentration_chart(component_summary, top_n=None), width="stretch")
+            render_hover_hint()
         with right:
             st.caption("This visual shows how many suppliers support each component. Components with supplier counts near one are the tightest resilience constraints in the portfolio.")
             st.altair_chart(
                 build_component_risk_bar_chart(component_summary, "supplier_count", "Supplier Count", top_n=None, ascending=True),
                 width="stretch",
             )
+            render_hover_hint()
 
     with tabs[4]:
         st.subheader("Supplier Scenarios")
@@ -5701,6 +5734,7 @@ def render_app():
                 .configure_legend(labelFontSize=12, titleFontSize=13)
             )
             st.altair_chart(scenario_chart, width="stretch")
+            render_hover_hint()
             show_table(scenario_df)
         display_assumptions("Scenario assumptions", scenario_assumptions)
 
@@ -5749,6 +5783,7 @@ def render_app():
             )
         )
         st.altair_chart(build_strategic_outcomes_chart(supplier_summary, scenario_applied=scenario_applied), width="stretch")
+        render_hover_hint()
         show_table(consolidation_plan)
         display_assumptions("Assumptions", consolidation_assumptions)
 
@@ -5771,6 +5806,7 @@ def render_app():
             + build_supplier_risk_methodology_note()
         )
         st.altair_chart(build_supplier_metric_chart(supplier_summary, "supplier_risk_score", "Supplier Risk Score"), width="stretch")
+        render_hover_hint()
         show_table(supplier_risk_assessment)
         display_assumptions("Assumptions", supplier_risk_assumptions)
 
@@ -5787,6 +5823,7 @@ def render_app():
             )
         )
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
+        render_hover_hint()
         show_table(strategic_sourcing_plan)
         display_assumptions("Assumptions", strategic_sourcing_assumptions)
 
@@ -5854,21 +5891,28 @@ def render_app():
                 render_narrative_text(visual["summary"])
             if visual["title"] == "Spend by Supplier":
                 st.altair_chart(build_supplier_metric_chart(supplier_summary, "spend", "Spend"), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Spend by Component":
                 st.altair_chart(build_component_risk_bar_chart(component_summary, "spend", "Spend", top_n=None), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Component Analysis Bubble":
                 st.altair_chart(build_component_analysis_bubble_chart(component_summary), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Component-Supplier Detail":
                 st.altair_chart(build_component_supplier_detail_chart(component_supplier_detail, top_n=None), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Spend Pareto (ABC)":
                 st.altair_chart(
                     build_pareto_chart(spend_pareto, "component", "spend", "spend_cum_share", "spend_abc", "Component", "Spend"),
                     width="stretch",
                 )
+                render_hover_hint()
             elif visual["title"] == "Supplier Concentration by Component":
                 st.altair_chart(build_supplier_concentration_chart(component_summary, top_n=None), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Supplier Risk Score":
                 st.altair_chart(build_supplier_metric_chart(supplier_summary, "supplier_risk_score", "Supplier Risk Score"), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Risk-Adjusted Pareto":
                 st.altair_chart(
                     build_pareto_chart(
@@ -5886,6 +5930,7 @@ def render_app():
                     ),
                     width="stretch",
                 )
+                render_hover_hint()
             elif visual["title"] == "Strategic Priority Pareto":
                 st.altair_chart(
                     build_pareto_chart(
@@ -5899,23 +5944,31 @@ def render_app():
                     ),
                     width="stretch",
                 )
+                render_hover_hint()
             elif visual["title"] == "Kraljic Positioning":
                 st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Supply Risk Score":
                 st.altair_chart(build_component_risk_bar_chart(component_summary, "supply_risk_score", "Supply Risk Score", top_n=None), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Supplier Count by Component":
                 st.altair_chart(
                     build_component_risk_bar_chart(component_summary, "supplier_count", "Supplier Count", top_n=None, ascending=True),
                     width="stretch",
                 )
+                render_hover_hint()
             elif visual["title"] == "Strategic Sourcing Outcomes":
                 st.altair_chart(build_strategic_outcomes_chart(supplier_summary, scenario_applied=scenario_applied), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Supplier Spend by Component Mix":
                 st.altair_chart(build_supplier_component_mix_chart(component_supplier_detail, component_summary, top_n_suppliers=None), width="stretch")
+                render_hover_hint()
             elif visual["title"] == "Supplier Spend by Kraljic Mix":
                 st.altair_chart(build_supplier_quadrant_mix_chart(component_supplier_detail, component_summary, top_n_suppliers=None), width="stretch")
+                render_hover_hint()
             else:
                 st.altair_chart(build_component_risk_bar_chart(component_summary, "supply_risk_score", "Supply Risk Score"), width="stretch")
+                render_hover_hint()
             st.caption("Supporting Data")
             show_table(visual["data"].reset_index())
             professor_notes = build_professor_notes(str(visual["title"]), analytics, scenario_applied=scenario_applied)
