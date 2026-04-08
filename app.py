@@ -4508,12 +4508,16 @@ def render_executive_dashboard(
         st.info("Upload procurement data to generate the executive dashboard summary, action priorities, and portfolio visuals.")
         return
 
-    render_kpi_cards(component_summary, supplier_summary)
     if scenario_applied and base_analytics is not None:
+        render_minor_spacing()
+        st.markdown('<div class="executive-section-title">Recommended Scenario</div>', unsafe_allow_html=True)
+        render_minor_spacing()
+        render_kpi_cards(component_summary, supplier_summary)
         render_minor_spacing()
         st.markdown('<div class="executive-section-title">Base Case Reference</div>', unsafe_allow_html=True)
         render_kpi_cards(base_analytics["component_summary"], base_analytics["supplier_summary"])
-    render_minor_spacing()
+    else:
+        render_minor_spacing()
     st.markdown('<div class="executive-section-title">Executive Summary</div>', unsafe_allow_html=True)
     executive_summary = build_executive_dashboard_summary(
         analytics,
