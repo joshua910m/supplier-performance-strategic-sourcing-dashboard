@@ -3713,8 +3713,16 @@ def build_executive_dashboard_summary(
     if not executive_actions.empty and "Supplier" in executive_actions.columns:
         top_action_row = executive_actions.iloc[0]
         action_supplier = str(top_action_row.get("Supplier", "")).strip()
-        action_text = str(top_action_row.get("Recommended Action", "")).strip()
+        action_text = str(top_action_row.get("Recommended Action", top_action_row.get("Action Plan", ""))).strip()
+        action_decision = str(top_action_row.get("Decision", "")).strip()
         if action_supplier:
+            if not action_text:
+                if "exit" in action_decision.lower() or "de-prioritize" in action_decision.lower():
+                    action_text = "test whether demand can move away from this supplier without creating new risk"
+                elif "consolidate" in action_decision.lower() or "keep" in action_decision.lower():
+                    action_text = "test whether consolidating more volume here improves the portfolio without increasing exposure"
+                else:
+                    action_text = "review quality, lead time, and exposure trends before deciding whether intervention is needed"
             highest_priority_action = (
                 f"The most urgent supplier action is to address {action_supplier}, where the current recommendation is to {action_text.lower()}."
                 if action_text
