@@ -3898,6 +3898,38 @@ def build_decision_mix_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
     )
 
 
+def build_decision_mix_summary_text(supplier_summary: pd.DataFrame) -> str:
+    if supplier_summary.empty:
+        return "No supplier decision mix is available for the current portfolio view."
+
+    decision_summary = (
+        supplier_summary.groupby("decision", as_index=False)["spend"].sum()
+        .assign(decision_order=lambda df: df["decision"].map({name: idx for idx, name in enumerate(DECISION_DOMAIN, start=1)}))
+        .sort_values("decision_order")
+    )
+    if decision_summary.empty:
+        return "No supplier decision mix is available for the current portfolio view."
+
+    driver_rows = (
+        supplier_summary.sort_values(["decision", "spend"], ascending=[True, False])
+        .groupby("decision")
+        .head(2)
+    )
+    driver_map = {
+        decision: format_name_list(group["supplier"].astype(str).tolist(), max_items=2)
+        for decision, group in driver_rows.groupby("decision")
+    }
+
+    parts = []
+    for _, row in decision_summary.iterrows():
+        decision = str(row["decision"])
+        spend = format_currency_compact(float(row["spend"]))
+        drivers = driver_map.get(decision, "the current supplier set")
+        parts.append(f"{decision} accounts for {spend}, led by {drivers}")
+
+    return "Decision mix by spend: " + "; ".join(parts) + "."
+
+
 def render_executive_dashboard(
     analytics: Dict[str, pd.DataFrame],
     executive_actions: pd.DataFrame,
@@ -3930,11 +3962,11 @@ def render_executive_dashboard(
 
     st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
     st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
-    st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure.")
+    st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure. Bubble color shows the current supplier decision recommendation.")
 
     st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
-    st.altair_chart(build_decision_mix_chart(supplier_summary), width="stretch")
-    st.caption("This chart shows how much supplier spend currently sits in each decision category, helping leadership see where the largest sourcing moves are concentrated.")
+    st.write(build_decision_mix_summary_text(supplier_summary))
+    st.caption("This summary shows how much supplier spend sits in each decision category and which suppliers drive those decision buckets.")
 
     st.markdown('<div class="executive-section-title">Priority Supplier Actions</div>', unsafe_allow_html=True)
     st.caption("Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers.")
