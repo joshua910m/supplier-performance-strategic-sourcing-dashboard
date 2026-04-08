@@ -4506,17 +4506,44 @@ def render_executive_dashboard(
         st.info("Scenario-adjusted dashboard view: metrics, actions, and visuals below reflect the currently applied scenario rather than the base portfolio.")
         if base_analytics is not None and applied_scenario_metrics is not None:
             base_supplier_count = int(base_analytics["supplier_summary"]["supplier"].nunique()) if not base_analytics["supplier_summary"].empty else 0
+            base_total_spend = float(base_analytics["component_summary"]["spend"].sum()) if not base_analytics["component_summary"].empty and "spend" in base_analytics["component_summary"].columns else 0.0
             base_high_risk_count = int(base_analytics["component_summary"]["high_risk_flag"].sum()) if not base_analytics["component_summary"].empty and "high_risk_flag" in base_analytics["component_summary"].columns else 0
+            applied_total_spend = float(component_summary["spend"].sum()) if not component_summary.empty and "spend" in component_summary.columns else 0.0
             applied_high_risk_count = int(component_summary["high_risk_flag"].sum()) if not component_summary.empty and "high_risk_flag" in component_summary.columns else 0
-            render_narrative_text(
-                "Base case reference: "
-                f"{base_supplier_count} suppliers, 0 mitigation suppliers, 100% covered spend, and {base_high_risk_count} high-risk components. "
-                "Applied scenario: "
-                f"{applied_scenario_metrics['selected_supplier_count']} selected suppliers, "
-                f"{applied_scenario_metrics['mitigation_supplier_count']} mitigation suppliers, "
-                f"{applied_scenario_metrics['covered_spend_share']:.0%} covered spend, "
-                f"and {applied_high_risk_count} high-risk components."
-            )
+            scenario_col, base_col = st.columns(2)
+            with scenario_col:
+                with st.container(border=True):
+                    st.markdown("**Applied Scenario**")
+                    top_left, top_right = st.columns(2)
+                    bottom_left, bottom_right = st.columns(2)
+                    with top_left:
+                        st.metric("Total Spend", format_currency_compact(applied_total_spend))
+                    with top_right:
+                        st.metric("Selected Suppliers", f"{applied_scenario_metrics['selected_supplier_count']}")
+                    with bottom_left:
+                        st.metric("Mitigation Suppliers", f"{applied_scenario_metrics['mitigation_supplier_count']}")
+                    with bottom_right:
+                        st.metric("High-Risk Components", f"{applied_high_risk_count}")
+                    covered_col, _ = st.columns(2)
+                    with covered_col:
+                        st.metric("Covered Spend", f"{applied_scenario_metrics['covered_spend_share']:.0%}")
+            with base_col:
+                with st.container(border=True):
+                    st.markdown("**Base Case**")
+                    top_left, top_right = st.columns(2)
+                    bottom_left, bottom_right = st.columns(2)
+                    with top_left:
+                        st.metric("Total Spend", format_currency_compact(base_total_spend))
+                    with top_right:
+                        st.metric("Selected Suppliers", f"{base_supplier_count}")
+                    with bottom_left:
+                        st.metric("Mitigation Suppliers", "0")
+                    with bottom_right:
+                        st.metric("High-Risk Components", f"{base_high_risk_count}")
+                    covered_col, _ = st.columns(2)
+                    with covered_col:
+                        st.metric("Covered Spend", "100%")
+            render_minor_spacing()
 
     if supplier_summary.empty or component_summary.empty:
         st.info("Upload procurement data to generate the executive dashboard summary, action priorities, and portfolio visuals.")
