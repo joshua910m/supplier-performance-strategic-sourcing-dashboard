@@ -4493,6 +4493,8 @@ def render_executive_dashboard(
     scenario_applied: bool = False,
     action_supplier_summary: Optional[pd.DataFrame] = None,
     negotiation_plan: Optional[pd.DataFrame] = None,
+    base_analytics: Optional[Dict[str, pd.DataFrame]] = None,
+    applied_scenario_metrics: Optional[Dict[str, float]] = None,
 ) -> None:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
@@ -4502,6 +4504,19 @@ def render_executive_dashboard(
     st.caption(APP_BUILD_LABEL)
     if scenario_applied:
         st.info("Scenario-adjusted dashboard view: metrics, actions, and visuals below reflect the currently applied scenario rather than the base portfolio.")
+        if base_analytics is not None and applied_scenario_metrics is not None:
+            base_supplier_count = int(base_analytics["supplier_summary"]["supplier"].nunique()) if not base_analytics["supplier_summary"].empty else 0
+            base_high_risk_count = int(base_analytics["component_summary"]["high_risk_flag"].sum()) if not base_analytics["component_summary"].empty and "high_risk_flag" in base_analytics["component_summary"].columns else 0
+            applied_high_risk_count = int(component_summary["high_risk_flag"].sum()) if not component_summary.empty and "high_risk_flag" in component_summary.columns else 0
+            render_narrative_text(
+                "Base case reference: "
+                f"{base_supplier_count} suppliers, 0 mitigation suppliers, 100% covered spend, and {base_high_risk_count} high-risk components. "
+                "Applied scenario: "
+                f"{applied_scenario_metrics['selected_supplier_count']} selected suppliers, "
+                f"{applied_scenario_metrics['mitigation_supplier_count']} mitigation suppliers, "
+                f"{applied_scenario_metrics['covered_spend_share']:.0%} covered spend, "
+                f"and {applied_high_risk_count} high-risk components."
+            )
 
     if supplier_summary.empty or component_summary.empty:
         st.info("Upload procurement data to generate the executive dashboard summary, action priorities, and portfolio visuals.")
@@ -5414,6 +5429,8 @@ def render_app():
             scenario_applied=scenario_applied,
             action_supplier_summary=applied_plan_analytics["supplier_summary"] if scenario_applied else None,
             negotiation_plan=applied_negotiation_plan if scenario_applied else None,
+            base_analytics=base_analytics if scenario_applied else None,
+            applied_scenario_metrics=applied_scenario_metrics if scenario_applied else None,
         )
 
     with tabs[1]:
