@@ -3702,6 +3702,17 @@ def render_hover_hint(text: str = "Hover over the visual to see supplier, compon
     st.markdown(f'<div class="hover-hint">{html.escape(str(text))}</div>', unsafe_allow_html=True)
 
 
+def build_estimated_savings_opportunity(executive_actions: pd.DataFrame, supplier_summary: pd.DataFrame) -> float:
+    if not executive_actions.empty and "Estimated Savings" in executive_actions.columns:
+        savings = pd.to_numeric(executive_actions["Estimated Savings"], errors="coerce").fillna(0.0)
+        if float(savings.sum()) > 0:
+            return float(savings.sum())
+    if not supplier_summary.empty and "estimated_savings" in supplier_summary.columns:
+        savings = pd.to_numeric(supplier_summary["estimated_savings"], errors="coerce").fillna(0.0)
+        return float(savings.sum())
+    return 0.0
+
+
 def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataFrame) -> None:
     total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns and not component_summary.empty else 0.0
     supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else 0
@@ -3755,6 +3766,9 @@ def build_executive_dashboard_summary(
 
     top_supplier = supplier_summary.sort_values("spend", ascending=False).iloc[0]
     top_component = component_summary.sort_values("spend", ascending=False).iloc[0]
+    total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns else float(supplier_summary["spend"].sum())
+    supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else len(supplier_summary)
+    component_count = int(component_summary["component"].nunique()) if "component" in component_summary.columns else len(component_summary)
     keep_count = int(supplier_summary["decision"].eq("Keep / Consolidate To").sum())
     monitor_count = int(supplier_summary["decision"].eq("Keep and Monitor").sum())
     exit_count = int(supplier_summary["decision"].eq("Eliminate / De-prioritize").sum())
@@ -3773,107 +3787,48 @@ def build_executive_dashboard_summary(
     def count_label(count: int, singular: str, plural: str) -> str:
         return f"{count} {singular if count == 1 else plural}"
 
-    highest_priority_action = ""
-    if not supplier_summary.empty and "supplier" in supplier_summary.columns:
-        issue_clauses: List[str] = []
-        if {"supplier", "supports_single_source"}.issubset(supplier_summary.columns):
-            single_source_suppliers = (
-                supplier_summary.loc[supplier_summary["supports_single_source"], "supplier"]
-                .astype(str)
-                .drop_duplicates()
-                .tolist()
-            )
-            if single_source_suppliers:
-                issue_clauses.append(f"{format_name_list(single_source_suppliers, max_items=4)} for single-source dependency")
-        if {"supplier", "supports_high_risk"}.issubset(supplier_summary.columns):
-            high_risk_suppliers = (
-                supplier_summary.loc[supplier_summary["supports_high_risk"], "supplier"]
-                .astype(str)
-                .drop_duplicates()
-                .tolist()
-            )
-            if high_risk_suppliers:
-                issue_clauses.append(f"{format_name_list(high_risk_suppliers, max_items=4)} for high-risk component exposure")
-        if {"supplier", "defect_rate"}.issubset(supplier_summary.columns):
-            defect_cutoff = float(supplier_summary["defect_rate"].quantile(0.75)) if len(supplier_summary) else 0.0
-            quality_suppliers = (
-                supplier_summary.loc[supplier_summary["defect_rate"] >= defect_cutoff, "supplier"]
-                .astype(str)
-                .drop_duplicates()
-                .tolist()
-            )
-            if quality_suppliers and defect_cutoff > 0:
-                issue_clauses.append(f"{format_name_list(quality_suppliers, max_items=4)} for higher defect rates")
-        if {"supplier", "avg_lead_time"}.issubset(supplier_summary.columns):
-            lead_cutoff = float(supplier_summary["avg_lead_time"].quantile(0.75)) if len(supplier_summary) else 0.0
-            lead_suppliers = (
-                supplier_summary.loc[supplier_summary["avg_lead_time"] >= lead_cutoff, "supplier"]
-                .astype(str)
-                .drop_duplicates()
-                .tolist()
-            )
-            if lead_suppliers and lead_cutoff > 0:
-                issue_clauses.append(f"{format_name_list(lead_suppliers, max_items=4)} for longer lead times")
-        if {"supplier", "avg_risk_score"}.issubset(supplier_summary.columns):
-            risk_cutoff = float(supplier_summary["avg_risk_score"].quantile(0.75)) if len(supplier_summary) else 0.0
-            external_risk_suppliers = (
-                supplier_summary.loc[supplier_summary["avg_risk_score"] >= risk_cutoff, "supplier"]
-                .astype(str)
-                .drop_duplicates()
-                .tolist()
-            )
-            if external_risk_suppliers and risk_cutoff > 0:
-                issue_clauses.append(f"{format_name_list(external_risk_suppliers, max_items=4)} for elevated external risk")
-
-        top_action_text = ""
-        if not executive_actions.empty and "Supplier" in executive_actions.columns:
-            top_action_row = executive_actions.iloc[0]
-            top_action_text = str(top_action_row.get("Recommended Action", top_action_row.get("Action Plan", ""))).strip()
-            top_action_decision = str(top_action_row.get("Decision", "")).strip()
-            if not top_action_text:
-                if "exit" in top_action_decision.lower() or "de-prioritize" in top_action_decision.lower():
-                    top_action_text = "test whether demand can move away from the clearest exit candidates without creating new risk"
-                elif "consolidate" in top_action_decision.lower() or "keep" in top_action_decision.lower():
-                    top_action_text = "test whether consolidating more volume with the strongest suppliers improves the portfolio without increasing exposure"
-                else:
-                    top_action_text = "review quality, lead time, and exposure trends before deciding whether intervention is needed"
-
-        if issue_clauses:
-            highest_priority_action = (
-                f"Priority supplier actions should focus on {'; '.join(issue_clauses[:5])}. "
-                f"We should begin by using scenario analysis to {top_action_text.lower()}."
-                if top_action_text
-                else f"Priority supplier actions should focus on {'; '.join(issue_clauses[:5])}."
-            )
+    estimated_savings = build_estimated_savings_opportunity(executive_actions, supplier_summary)
+    top_action_text = ""
+    if not executive_actions.empty and "Supplier" in executive_actions.columns:
+        top_action_row = executive_actions.iloc[0]
+        top_action_text = str(top_action_row.get("Recommended Action", top_action_row.get("Action Plan", ""))).strip()
+        top_action_decision = str(top_action_row.get("Decision", "")).strip()
+        if not top_action_text:
+            if "exit" in top_action_decision.lower() or "de-prioritize" in top_action_decision.lower():
+                top_action_text = "test whether demand can move away from the clearest exit candidates without creating new risk"
+            elif "consolidate" in top_action_decision.lower() or "keep" in top_action_decision.lower():
+                top_action_text = "test whether consolidating more volume with the strongest suppliers improves the portfolio without increasing exposure"
+            else:
+                top_action_text = "review quality, lead time, and exposure trends before deciding whether intervention is needed"
 
     concentration_sentence = (
-        f"Spend is concentrated most heavily with {top_supplier['supplier']} at {format_currency_compact(top_supplier['spend'])}, while {top_component['component']} is the largest component category at {format_currency_compact(top_component['spend'])}."
-    )
-    decision_sentence = (
-        f"The current portfolio points to {count_label(exit_count, 'supplier', 'suppliers')} as the clearest exit or de-prioritization candidate, {count_label(keep_count, 'supplier', 'suppliers')} as the strongest retention or consolidation targets, and {count_label(monitor_count, 'supplier', 'suppliers')} that still warrants active oversight."
+        f"The portfolio represents {format_currency_compact(total_spend)} across {supplier_count} suppliers and {component_count} components, with the heaviest concentration sitting with {top_supplier['supplier']} and {top_component['component']}."
     )
     single_source_sentence = (
-        f"The supply base still has meaningful single-source exposure across {count_label(len(single_source_components), 'component', 'components')}, led by {format_name_list(single_source_components, max_items=4)}."
+        f"Structural exposure remains concentrated in {count_label(len(single_source_components), 'single-source component', 'single-source components')}, led by {format_name_list(single_source_components, max_items=4)}."
         if single_source_components
-        else "No components are currently single-sourced in the active view, which materially reduces continuity concentration."
+        else "The current view shows no single-source components, which materially lowers structural continuity risk."
+    )
+    decision_sentence = (
+        f"The supplier decision mix currently points to {count_label(exit_count, 'supplier', 'suppliers')} to exit or de-prioritize, {count_label(keep_count, 'supplier', 'suppliers')} to retain or consolidate toward, and {count_label(monitor_count, 'supplier', 'suppliers')} to keep under active review."
     )
     risk_sentence = (
-        f"The clearest risk and performance concerns sit in {format_name_list(high_risk_components, max_items=4)}, while the current supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
+        f"The main risk and performance concerns sit in {format_name_list(high_risk_components, max_items=4)}, while the active supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defects and {avg_lead_time:,.1f} days average lead time."
         if high_risk_components
-        else f"Risk and performance are comparatively contained, with the current supplier base running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
+        else f"The portfolio is relatively more stable on risk and performance, with roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defects and {avg_lead_time:,.1f} days average lead time across suppliers."
+    )
+    savings_sentence = (
+        f"The identified supplier actions represent about {format_currency_compact(estimated_savings)} in modeled savings opportunity."
+        if estimated_savings > 0
+        else "The current view is primarily signaling risk and concentration priorities rather than a material modeled savings opportunity."
     )
     next_focus = (
-        "We should use this scenario-adjusted view to confirm the supplier set, lock mitigation assignments, and move the approved changes into execution."
+        "We should confirm the applied supplier set, lock mitigation assignments, and move the approved changes into execution."
         if scenario_applied
+        else f"We should next validate the proposed exit and consolidation moves, then use scenario analysis to {top_action_text.lower()}." if top_action_text
         else "We should next validate the proposed exit and consolidation moves, then use scenario analysis to reduce exposure without giving up too much coverage or savings."
     )
-    sentences = [concentration_sentence, decision_sentence, single_source_sentence, risk_sentence]
-    if highest_priority_action:
-        sentences.append(highest_priority_action[:1].upper() + highest_priority_action[1:])
-    elif summary_text:
-        sentences.append("The broader portfolio narrative continues to reinforce the same sourcing priorities highlighted elsewhere in the dashboard.")
-    sentences.append(next_focus)
-    return " ".join(sentences[:6])
+    return " ".join([concentration_sentence, single_source_sentence, decision_sentence, risk_sentence, savings_sentence, next_focus])
 
 
 def build_executive_summary_text(analytics: Dict[str, pd.DataFrame], scenario_applied: bool = False) -> str:
@@ -4100,6 +4055,7 @@ def render_executive_dashboard(
     component_summary = analytics["component_summary"]
     st.subheader("Supplier Performance & Strategic Sourcing Dashboard")
     st.caption("This dashboard turns uploaded procurement data into supplier risk, consolidation, and sourcing decisions.")
+    st.caption("Built for procurement and supply chain decision-making — not just reporting.")
     st.caption(APP_BUILD_LABEL)
     if scenario_applied:
         st.info("Scenario-adjusted dashboard view: metrics, actions, and visuals below reflect the currently applied scenario rather than the base portfolio.")
@@ -4118,14 +4074,19 @@ def render_executive_dashboard(
     )
     render_narrative_text(executive_summary, class_name="executive-summary-card")
 
-    st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
-    st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
-    render_hover_hint()
-    st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure. Bubble color shows the current supplier decision recommendation.")
-
-    st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
-    render_narrative_text(build_decision_mix_summary_text(supplier_summary))
-    st.caption("This summary shows how much supplier spend sits in each decision category and which suppliers drive those decision buckets.")
+    st.caption("These visuals show where supplier risk, quality, and spend concentration intersect.")
+    left_col, right_col = st.columns(2)
+    with left_col:
+        st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
+        st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
+        render_hover_hint()
+        st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure. Bubble color shows the current supplier decision recommendation.")
+    with right_col:
+        st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
+        st.altair_chart(build_decision_mix_chart(supplier_summary), width="stretch")
+        render_hover_hint("Hover over the visual to see the decision category, supplier, spend, and share of decision spend.")
+        st.caption("This chart shows how much spend sits in each supplier decision category and which suppliers drive the largest share of each bucket.")
+        render_narrative_text(build_decision_mix_summary_text(supplier_summary))
 
     st.markdown('<div class="executive-section-title">Priority Supplier Actions</div>', unsafe_allow_html=True)
     st.caption("Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers.")

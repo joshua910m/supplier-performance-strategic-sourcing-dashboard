@@ -2,32 +2,28 @@
 
 ## Overview
 
-This project is an executive-ready supplier performance and strategic sourcing decision dashboard built in Streamlit. It takes messy procurement Excel or CSV inputs, normalizes them into a consistent analytical model, and turns them into supplier risk visibility, sourcing priorities, action plans, and scenario comparisons.
-
-The goal is not just to show charts. The dashboard is designed to help procurement, supply chain, and operations teams decide where spend is concentrated, where supplier and component risk is building, which suppliers should be retained or exited, and what sourcing actions should happen next.
+Supplier Performance & Strategic Sourcing Dashboard is a Streamlit application built to turn messy procurement data into decision-ready supplier, risk, and sourcing insights. It is designed for procurement and supply chain teams that need to move quickly from raw Excel or CSV files to supplier actions, scenario comparisons, and executive-ready recommendations.
 
 ## Business Problem
 
-Procurement data is rarely ready for decision-making out of the box. Teams often inherit spreadsheets with inconsistent field names, incomplete risk inputs, mixed formats, and no clear link between raw spend data and the sourcing decisions leadership needs to make.
+Procurement teams often work with incomplete, inconsistent, and non-standard source files that make it difficult to answer the questions leadership actually cares about. Supplier risk, quality issues, lead-time exposure, single-source dependencies, and fragmented spend can all exist in the data without being translated into clear decisions.
 
-This project closes that gap by translating raw procurement data into a business-facing workflow that supports supplier reviews, sourcing strategy discussions, continuity risk assessments, and portfolio-level action planning.
+That creates a gap between analysis and action. Leaders may know there is exposure in the supply base, but they still need a way to see where spend is concentrated, which suppliers are truly replaceable, which components are structurally risky, and what to do next.
+
+## Solution
+
+This application ingests messy Excel and CSV procurement files, normalizes the fields into a common structure, and converts them into supplier performance insights, sourcing risk views, scenario-based decision support, and action-oriented supplier recommendations. Instead of stopping at reporting, it combines analytics with business logic to highlight what should be retained, monitored, mitigated, consolidated, or exited.
 
 ## Key Features
 
-- Executive dashboard with KPI cards, business narrative, priority supplier actions, and decision-first visuals
-- Robust handling of messy Excel and CSV procurement inputs
-- Supplier and component portfolio summaries
-- Component-level supply risk scoring
-- Supplier-level risk scoring
-- Kraljic-style component segmentation
-- ABC / Pareto prioritization views
-- Supplier decision recommendations:
-  - Keep / Consolidate To
-  - Keep and Monitor
-  - Eliminate / De-prioritize
-- Scenario analysis for consolidation, mitigation, and sourcing tradeoff testing
-- Strategic sourcing plan, supplier action plan, and sequenced action guidance
-- Executive-ready exports for presentation and handoff
+- Automated data normalization for inconsistent procurement inputs
+- KPI dashboard for supplier footprint, spend, lead time, defects, and single-source exposure
+- Executive summary built from current supplier, component, and scenario analytics
+- Supplier Risk vs Performance visualization for quality, lead-time, and spend exposure
+- Decision Mix by Spend view to show how supplier spend is distributed across decision categories
+- Priority supplier action recommendations with issues, actions, and savings
+- Scenario analysis for supplier consolidation, mitigation, and tradeoff testing
+- Strategic sourcing, risk, and action-planning views for follow-through
 
 ## Tech Stack
 
@@ -36,64 +32,58 @@ This project closes that gap by translating raw procurement data into a business
 - Pandas
 - NumPy
 - Altair
-- OpenPyXL
 - GitHub
 
 ## How It Works
 
 1. Upload procurement data from Excel or CSV.
-2. The app normalizes inconsistent source fields into a common structure.
-3. It calculates supplier, component, risk, concentration, and sourcing analytics.
-4. It classifies components and suppliers into decision-ready views.
-5. It surfaces executive summaries, supplier actions, scenario comparisons, and strategic sourcing outputs.
+2. Normalize messy or inconsistent fields into a common data model.
+3. Compute supplier, component, concentration, and risk analytics.
+4. Classify supplier actions and highlight sourcing priorities.
+5. Explore scenario alternatives and review decision-ready outputs.
 
 ## Example Use Cases
 
-- Preparing for an executive supplier review
-- Identifying single-source and high-risk component exposure
-- Comparing consolidation and mitigation scenarios
-- Prioritizing supplier exits, retention, and monitoring plans
-- Teaching sourcing strategy, Pareto logic, and Kraljic analysis with a practical business dataset
+- Identify single-source exposure before it becomes a continuity problem
+- Evaluate which suppliers are strongest for consolidation
+- Flag replaceable suppliers for exit or de-prioritization scenarios
+- Compare risk concentration against spend concentration
+- Support sourcing strategy and procurement decision-making with executive-ready outputs
 
 ## How to Run
 
-1. Install dependencies:
+1. Clone the repository:
+
+```powershell
+git clone https://github.com/joshua910m/supplier-performance-strategic-sourcing-dashboard.git
+cd supplier-performance-strategic-sourcing-dashboard
+```
+
+2. Install dependencies:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-2. Launch the Streamlit app:
+3. Run the app:
 
 ```powershell
 python -m streamlit run app.py
 ```
 
-3. Open the local URL shown in the terminal, usually:
-
-```text
-http://localhost:8501
-```
-
 ## Screenshot Placeholders
 
 - `[Screenshot Placeholder] Executive Dashboard`
-- `[Screenshot Placeholder] Component Risk`
 - `[Screenshot Placeholder] Supplier Decisions`
 - `[Screenshot Placeholder] Scenario Analysis`
-- `[Screenshot Placeholder] Strategic Sourcing`
-- `[Screenshot Placeholder] Action Plan`
 
 ## Future Enhancements
 
-- Named scenario save/load and side-by-side scenario comparison history
-- Audience-specific exports for executives, procurement managers, and supply chain analysts
-- Sensitivity testing for supplier failure, lead-time shocks, and mitigation breakdowns
-- Confidence scoring for inferred inputs and modeled assumptions
-- More presentation-ready export layouts for board or leadership reviews
+- Power BI version for enterprise reporting environments
+- Forecast and demand-planning integration
+- Supplier benchmark and scorecard tracking over time
+- Automated refresh pipeline from procurement source systems
 
 ## Why This Project Matters
 
-This dashboard shows how business analytics can move beyond reporting and into decision support. It combines Streamlit, Python, Pandas, NumPy, Altair, and GitHub into a portfolio-quality application that turns messy procurement data into sourcing, risk, and supplier action decisions.
-
-For hiring managers and recruiters, the value of the project is that it demonstrates more than code. It shows business framing, data normalization, analytical modeling, decision logic, scenario evaluation, and executive-ready communication in one product.
+This project is more than a dashboard. It demonstrates how analytics, business logic, and product thinking can come together to support real procurement and supply chain decisions. It handles messy procurement inputs, turns them into supplier and component risk views, and produces recommendations that are useful for leadership conversations, sourcing reviews, and practical action planning.
