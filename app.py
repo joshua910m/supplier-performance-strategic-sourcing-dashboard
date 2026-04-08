@@ -1774,6 +1774,7 @@ def build_supplier_metric_chart(
     title: str,
     top_n: Optional[int] = None,
     ascending: bool = False,
+    color_by_decision: bool = True,
 ) -> alt.Chart:
     sorted_data = supplier_summary.sort_values(metric, ascending=ascending).copy()
     chart_data = sorted_data.head(top_n).copy() if top_n is not None else sorted_data
@@ -1781,19 +1782,17 @@ def build_supplier_metric_chart(
         domain=["Eliminate / De-prioritize", "Keep and Monitor", "Keep / Consolidate To"],
         range=["#d73027", "#f39c12", "#2e8b57"],
     )
-    return (
-        alt.Chart(chart_data)
-        .mark_bar()
-        .encode(
-            x=alt.X("supplier:N", title="Supplier", axis=alt.Axis(labelAngle=0, labelLimit=220)),
-            y=alt.Y(f"{metric}:Q", title=title),
-            color=alt.Color("decision:N", title="Recommendation", scale=color_scale),
-            tooltip=["supplier", "decision", metric, "spend", "estimated_savings"],
-        )
-        .properties(height=420)
-        .configure_axis(labelFontSize=11, titleFontSize=13)
-        .configure_legend(labelFontSize=12, titleFontSize=13)
-    )
+    base_chart = alt.Chart(chart_data).mark_bar()
+    encodings = {
+        "x": alt.X("supplier:N", title="Supplier", axis=alt.Axis(labelAngle=0, labelLimit=220)),
+        "y": alt.Y(f"{metric}:Q", title=title),
+        "tooltip": ["supplier", "decision", metric, "spend", "estimated_savings"],
+    }
+    if color_by_decision:
+        encodings["color"] = alt.Color("decision:N", title="Recommendation", scale=color_scale)
+    else:
+        encodings["color"] = alt.value("#1f4e79")
+    return base_chart.encode(**encodings).properties(height=420).configure_axis(labelFontSize=11, titleFontSize=13).configure_legend(labelFontSize=12, titleFontSize=13)
 
 
 def build_pareto_chart(
@@ -4923,7 +4922,8 @@ def render_app():
     with tabs[3]:
         st.subheader("Supplier Spend Analysis")
         render_narrative_text(build_supplier_spend_summary(supplier_summary, component_summary))
-        st.altair_chart(build_supplier_metric_chart(supplier_summary, "spend", "Spend"), width="stretch")
+        st.altair_chart(build_supplier_metric_chart(supplier_summary, "spend", "Spend", color_by_decision=False), width="stretch")
+        st.caption("This chart ranks suppliers by spend only, so the size of each commercial relationship is clear before introducing the recommendation logic.")
         render_hover_hint()
         st.subheader("Supplier Decision Overview")
         st.caption("This view shows how supplier spend aligns to the current decision model so leaders can see where the largest keep, monitor, and exit calls sit.")
@@ -4939,6 +4939,7 @@ def render_app():
         st.subheader("Component Spend Analysis")
         render_narrative_text(build_component_spend_summary(component_summary))
         st.altair_chart(build_component_risk_bar_chart(component_summary, "spend", "Spend", top_n=None), width="stretch")
+        st.caption("This chart is a straight component spend ranking. Use it to see which parts carry the largest raw cost before moving into risk, ABC, or strategy views.")
         render_hover_hint()
         st.subheader("Component Analysis")
         render_narrative_text(build_component_analysis_summary(component_summary))
@@ -5043,8 +5044,8 @@ def render_app():
         show_table(
             strategic_pareto[["component", "strategic_priority_score", "strategic_cum_share", "strategic_abc"]],
         )
-        st.subheader("Pareto 4 Quadrant Chart")
-        st.caption("This visual combines supply risk and profit impact so each component can be interpreted through the Kraljic lens. The upper-right Strategic area contains the components where continuity planning and executive supplier management matter most.")
+        st.subheader("Kraljic Portfolio View")
+        st.caption("This version of the Kraljic chart is used for portfolio segmentation. It helps separate Strategic, Bottleneck, Leverage, and Non-Critical items before translating them into sourcing strategy.")
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
         render_hover_hint()
 
@@ -5065,7 +5066,7 @@ def render_app():
         )
         st.subheader("Kraljic Positioning")
         render_narrative_text(build_kraljic_positioning_summary(component_summary))
-        st.caption(build_risk_score_methodology_note())
+        st.caption("This version of the Kraljic chart is used as a risk context view at the component level. " + build_risk_score_methodology_note())
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
         render_hover_hint()
         show_table(
@@ -5841,6 +5842,7 @@ def render_app():
                 else "Strategic sourcing priorities are being ranked so resilience and commercial effort can be focused where they matter most."
             )
         )
+        st.caption("This version of the Kraljic chart is reused specifically to support sourcing action planning, so the same component positions can be translated into supplier and strategy moves.")
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
         render_hover_hint()
         show_table(strategic_sourcing_plan)
