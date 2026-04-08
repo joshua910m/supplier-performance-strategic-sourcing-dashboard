@@ -3,6 +3,7 @@ import io
 import itertools
 import math
 import re
+import sqlite3
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -282,6 +283,7 @@ DEFAULT_DATASET_CANDIDATES = [
     Path(__file__).with_name("sample_data.xlsx"),
     Path(__file__).with_name("sample_data.xls"),
 ]
+DEFAULT_SQLITE_DATABASE = Path(__file__).with_name("sample_sql_data.db")
 RISK_LEVEL_DOMAIN = ["High", "Medium", "Low"]
 RISK_LEVEL_RANGE = ["#d73027", "#f39c12", "#2e8b57"]
 ABC_CLASS_DOMAIN = ["A", "B", "C"]
@@ -555,6 +557,65 @@ def build_sample_data() -> pd.DataFrame:
     return normalize_input_data(sample_df)
 
 
+def build_sample_sql_seed_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            ["Alpha Metals", "Bearing Assembly", 160000, 2000, 80, 18, 21, 62, 88],
+            ["Beta Industrial", "Bearing Assembly", 90000, 1100, 82, 10, 18, 45, 88],
+            ["Alpha Metals", "Housing Unit", 120000, 1500, 80, 9, 26, 58, 78],
+            ["Delta Components", "Housing Unit", 60000, 800, 75, 22, 34, 71, 78],
+            ["Nova Circuits", "Controller Board", 230000, 900, 255, 32, 42, 84, 95],
+            ["Prime Source", "Controller Board", 40000, 150, 267, 7, 37, 64, 95],
+            ["Omega Plastics", "Seal Kit", 50000, 5000, 10, 14, 10, 32, 52],
+            ["Vertex Supply", "Seal Kit", 35000, 3300, 11, 8, 12, 28, 52],
+            ["Vertex Supply", "Fastener Pack", 42000, 12000, 3.5, 30, 8, 25, 40],
+            ["Sigma Parts", "Fastener Pack", 28000, 9000, 3.1, 18, 11, 38, 40],
+            ["Nova Circuits", "Sensor Module", 145000, 500, 290, 21, 45, 87, 91],
+            ["Core Micro", "Sensor Module", 60000, 220, 273, 12, 39, 74, 91],
+            ["Gamma Forging", "Valve Body", 98000, 950, 103, 11, 29, 55, 73],
+            ["Titan Works", "Valve Body", 66000, 620, 106, 15, 31, 68, 73],
+            ["Solo Precision", "Custom Bracket", 76000, 400, 190, 16, 47, 82, 86],
+            ["Alpha Metals", "Rotor Shaft", 110000, 700, 157, 6, 24, 51, 84],
+            ["Titan Works", "Rotor Shaft", 45000, 300, 150, 9, 27, 66, 84],
+            ["Prime Source", "Power Relay", 72000, 1200, 60, 11, 20, 53, 65],
+            ["Electra Hub", "Power Relay", 68000, 1050, 64.8, 5, 16, 41, 65],
+            ["Solo Precision", "Safety Latch", 54000, 240, 225, 9, 51, 79, 93],
+        ],
+        columns=["supplier", "component", "spend", "units", "unit_cost", "defects", "lead_time", "risk_score", "criticality"],
+    )
+
+
+def ensure_default_sqlite_database() -> Path:
+    if DEFAULT_SQLITE_DATABASE.exists():
+        return DEFAULT_SQLITE_DATABASE
+
+    seed_df = build_sample_sql_seed_frame()
+    with sqlite3.connect(DEFAULT_SQLITE_DATABASE) as conn:
+        seed_df.to_sql("procurement_data", conn, if_exists="replace", index=False)
+        seed_df.to_sql("supplier_performance_summary", conn, if_exists="replace", index=False)
+        seed_df.to_sql("component_risk_summary", conn, if_exists="replace", index=False)
+    return DEFAULT_SQLITE_DATABASE
+
+
+def get_default_sqlite_connection_url() -> str:
+    database_path = ensure_default_sqlite_database().resolve().as_posix()
+    return f"sqlite:///{database_path}"
+
+
+def has_configured_sql_connection() -> bool:
+    try:
+        connections_config = st.secrets.get("connections", {})
+    except Exception:
+        return False
+    return bool(isinstance(connections_config, dict) and connections_config.get("sql"))
+
+
+def get_sql_connection(sql_connection_mode: str = "Bundled SQL Example"):
+    if sql_connection_mode == "Configured SQL Connection":
+        return st.connection("sql", type="sql")
+    return st.connection("sql_default", type="sql", url=get_default_sqlite_connection_url())
+
+
 def process_loaded_frame(raw: pd.DataFrame, source_label: str) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
     cleaned = cleanup_excel_frame(raw)
     diagnostics = build_input_diagnostics(cleaned)
@@ -632,21 +693,25 @@ def load_uploaded_data(file_name: str, file_bytes: bytes) -> Tuple[pd.DataFrame,
 
 
 @st.cache_data(show_spinner=False)
-def load_sql_data(query: str, source_name: str = "SQL Database") -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
+def load_sql_data(
+    query: str,
+    source_name: str = "SQL Database",
+    sql_connection_mode: str = "Bundled SQL Example",
+) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
     validated_query = validate_sql_query(query)
-    conn = st.connection("sql", type="sql")
+    conn = get_sql_connection(sql_connection_mode)
     raw = conn.query(validated_query, ttl=0)
     if raw.empty:
         raise ValueError("The SQL query returned no rows.")
     descriptor = describe_sql_query(validated_query)
-    source_label = f"Loaded source: {source_name} | {descriptor}"
+    source_label = f"Loaded source: {source_name} | {sql_connection_mode} | {descriptor}"
     return process_loaded_frame(raw, source_label)
 
 
 @st.cache_data(show_spinner=False)
-def preview_sql_data(query: str, preview_rows: int = 20) -> pd.DataFrame:
+def preview_sql_data(query: str, sql_connection_mode: str = "Bundled SQL Example", preview_rows: int = 20) -> pd.DataFrame:
     validated_query = validate_sql_query(query)
-    conn = st.connection("sql", type="sql")
+    conn = get_sql_connection(sql_connection_mode)
     raw = conn.query(validated_query, ttl=0)
     return cleanup_excel_frame(raw).head(preview_rows)
 
@@ -5272,11 +5337,17 @@ def build_kraljic_positioning_summary(component_summary: pd.DataFrame) -> str:
     )
 
 
-def load_data(data_source: str, uploaded_file, sql_query: Optional[str] = None) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
+def load_data(
+    data_source: str,
+    uploaded_file,
+    sql_query: Optional[str] = None,
+    sql_connection_mode: str = "Bundled SQL Example",
+) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
     if data_source == "SQL Database":
         if not sql_query:
             return get_default_data()
-        return load_sql_data(sql_query)
+        source_name = "SQL Example Package" if sql_connection_mode == "Bundled SQL Example" else "SQL Database"
+        return load_sql_data(sql_query, source_name=source_name, sql_connection_mode=sql_connection_mode)
     if uploaded_file is None:
         return get_default_data()
     return load_uploaded_data(uploaded_file.name, uploaded_file.getvalue())
@@ -5385,6 +5456,8 @@ def render_app():
         st.session_state["active_sql_query"] = None
     if "sql_mode_message" not in st.session_state:
         st.session_state["sql_mode_message"] = None
+    if "sql_connection_mode" not in st.session_state:
+        st.session_state["sql_connection_mode"] = "Bundled SQL Example"
 
     with st.sidebar:
         st.markdown("### Data Source")
@@ -5399,6 +5472,21 @@ def render_app():
             st.info(
                 "SQL input is intended for read-only procurement datasets. Results are normalized into the same analysis model as uploaded files."
             )
+            sql_connection_options = ["Bundled SQL Example"]
+            if has_configured_sql_connection():
+                sql_connection_options.append("Configured SQL Connection")
+            elif st.session_state.get("sql_connection_mode") == "Configured SQL Connection":
+                st.session_state["sql_connection_mode"] = "Bundled SQL Example"
+            sql_connection_mode = st.radio(
+                "SQL Connection Source",
+                sql_connection_options,
+                key="sql_connection_mode",
+            )
+            if sql_connection_mode == "Bundled SQL Example":
+                ensure_default_sqlite_database()
+                st.caption("Uses the bundled local SQLite sample database included with the app.")
+            else:
+                st.caption("Uses the configured `connections.sql` database from `.streamlit/secrets.toml`.")
             selected_example = st.selectbox(
                 "Example query",
                 options=list(SQL_EXAMPLE_QUERIES.keys()),
@@ -5416,7 +5504,7 @@ def render_app():
             st.caption("Example schemas: procurement_data, supplier_performance_summary, component_risk_summary.")
             if st.button("Test SQL Connection", use_container_width=True):
                 try:
-                    conn = st.connection("sql", type="sql")
+                    conn = get_sql_connection(sql_connection_mode)
                     conn.query("SELECT 1", ttl=0)
                     st.session_state["sql_mode_message"] = ("success", "SQL connection successful.")
                 except Exception:
@@ -5447,6 +5535,7 @@ def render_app():
                 data_source,
                 uploaded_file,
                 st.session_state.get("active_sql_query"),
+                st.session_state.get("sql_connection_mode", "Bundled SQL Example"),
             )
             base_analytics = build_analytics(normalized_df)
             if data_source == "SQL Database" and st.session_state.get("active_sql_query"):
@@ -5537,7 +5626,14 @@ def render_app():
         if data_source == "SQL Database" and st.session_state.get("active_sql_query"):
             with st.expander("Preview Raw SQL Rows"):
                 try:
-                    st.dataframe(preview_sql_data(st.session_state["active_sql_query"]), width="stretch", hide_index=True)
+                    st.dataframe(
+                        preview_sql_data(
+                            st.session_state["active_sql_query"],
+                            st.session_state.get("sql_connection_mode", "Bundled SQL Example"),
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
                 except Exception:
                     st.caption("Raw SQL preview is unavailable for the current query.")
     if scenario_state and applied_scenario_metrics is not None:
