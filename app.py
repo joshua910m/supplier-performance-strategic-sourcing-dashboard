@@ -19,12 +19,12 @@ st.markdown(
     <style>
     @keyframes scenarioPulse {
         0%, 100% {
-            box-shadow: 0 0 0 rgba(255, 255, 255, 0.0);
-            transform: translateY(0);
+            filter: saturate(1) brightness(1);
+            box-shadow: 0 0 0 0 rgba(255, 244, 214, 0.0) !important;
         }
         50% {
-            box-shadow: 0 0 0 6px rgba(255, 255, 255, 0.14);
-            transform: translateY(-1px);
+            filter: saturate(1.18) brightness(1.14);
+            box-shadow: 0 0 0 4px rgba(255, 244, 214, 0.35) !important;
         }
     }
     div[role="tablist"] > button[role="tab"],
@@ -86,7 +86,7 @@ st.markdown(
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) {
         background: #b91c1c !important;
         border-color: #b91c1c !important;
-        animation: scenarioPulse 1.8s ease-in-out infinite;
+        animation: scenarioPulse 1.4s ease-in-out infinite !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"],
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] {
