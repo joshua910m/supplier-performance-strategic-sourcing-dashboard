@@ -4238,17 +4238,14 @@ def build_post_scenario_negotiation_chart(negotiation_plan: pd.DataFrame) -> alt
         ["Potential Incremental Savings", "Negotiation Leverage Score"], ascending=[False, False]
     ).head(8)
 
-    return (
+    chart_data["Savings Label"] = chart_data["Potential Incremental Savings"].map(lambda value: f"${float(value):,.0f}")
+
+    bars = (
         alt.Chart(chart_data)
-        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, color="#0f766e")
         .encode(
             x=alt.X("Supplier:N", sort="-y", axis=alt.Axis(labelAngle=-25, labelLimit=180)),
             y=alt.Y("Potential Incremental Savings:Q", title="Potential Incremental Savings"),
-            color=alt.Color(
-                "Negotiation Leverage Score:Q",
-                title="Negotiation Leverage Score",
-                scale=alt.Scale(scheme="teals"),
-            ),
             tooltip=[
                 alt.Tooltip("Supplier:N", title="Supplier"),
                 alt.Tooltip("Scenario Spend:Q", title="Scenario Spend", format="$,.0f"),
@@ -4260,9 +4257,27 @@ def build_post_scenario_negotiation_chart(negotiation_plan: pd.DataFrame) -> alt
                 alt.Tooltip("Potential Incremental Savings:Q", title="Potential Incremental Savings", format="$,.0f"),
             ],
         )
+    )
+
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(
+            dy=-8,
+            color="#0f172a",
+            fontSize=11,
+            fontWeight="bold",
+        )
+        .encode(
+            x=alt.X("Supplier:N", sort="-y"),
+            y=alt.Y("Potential Incremental Savings:Q"),
+            text=alt.Text("Savings Label:N"),
+        )
+    )
+
+    return (
+        (bars + labels)
         .properties(height=320)
         .configure_axis(labelFontSize=11, titleFontSize=13)
-        .configure_legend(labelFontSize=11, titleFontSize=12)
     )
 
 
