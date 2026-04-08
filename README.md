@@ -46,7 +46,12 @@ This application ingests messy Excel and CSV procurement files or read-only SQL 
 
 ## SQL Database Configuration
 
-SQL mode uses Streamlit native SQL connections. Store credentials in `.streamlit/secrets.toml`:
+SQL mode uses Streamlit native SQL connections. In the app, users can choose between:
+
+- the bundled SQL example package backed by a local SQLite sample database
+- their own configured `connections.sql` database from `.streamlit/secrets.toml`
+
+To connect to your own database, store credentials in `.streamlit/secrets.toml`:
 
 ```toml
 [connections.sql]
@@ -54,6 +59,12 @@ url = "postgresql+psycopg2://username:password@host:5432/database"
 ```
 
 SQLAlchemy-compatible connection URLs are supported through Streamlit's SQL connection config. In this v1 implementation, SQL mode accepts read-only `SELECT` and `WITH` queries only.
+
+Default bundled SQL tables:
+
+- `procurement_data`
+- `supplier_performance_summary`
+- `component_risk_summary`
 
 ## Example Use Cases
 
