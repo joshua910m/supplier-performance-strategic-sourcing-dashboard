@@ -1,3 +1,4 @@
+import html
 import io
 import itertools
 import math
@@ -166,6 +167,23 @@ st.markdown(
         color: #0f172a;
         margin: 0.2rem 0 0.35rem 0;
     }
+    .executive-summary-card {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.98));
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 16px;
+        padding: 1rem 1.1rem;
+        box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
+        color: #0f172a;
+        font-size: 1rem;
+        line-height: 1.65;
+        margin-bottom: 0.4rem;
+    }
+    .narrative-text {
+        color: #0f172a;
+        font-size: 1rem;
+        line-height: 1.65;
+        margin: 0.15rem 0 0.45rem 0;
+    }
     @media (prefers-color-scheme: dark) {
         .executive-kpi-card {
             background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.95));
@@ -182,6 +200,15 @@ st.markdown(
             color: #cbd5e1;
         }
         .executive-section-title {
+            color: #f8fafc;
+        }
+        .executive-summary-card {
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.88), rgba(30, 41, 59, 0.94));
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            box-shadow: 0 12px 28px rgba(2, 6, 23, 0.34);
+            color: #f8fafc;
+        }
+        .narrative-text {
             color: #f8fafc;
         }
     }
@@ -3607,6 +3634,10 @@ def weighted_average(values: pd.Series, weights: pd.Series) -> float:
     return float((safe_values * safe_weights).sum() / total_weight)
 
 
+def render_narrative_text(text: str, class_name: str = "narrative-text") -> None:
+    st.markdown(f'<div class="{class_name}">{html.escape(str(text))}</div>', unsafe_allow_html=True)
+
+
 def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataFrame) -> None:
     total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns and not component_summary.empty else 0.0
     supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else 0
@@ -3694,22 +3725,22 @@ def build_executive_dashboard_summary(
         f"Spend is concentrated most heavily with {top_supplier['supplier']} at {format_currency_compact(top_supplier['spend'])}, while {top_component['component']} is the largest component category at {format_currency_compact(top_component['spend'])}."
     )
     decision_sentence = (
-        f"The current portfolio identifies {count_label(exit_count, 'supplier', 'suppliers')} as the clearest exit or de-prioritization candidate, {count_label(keep_count, 'supplier', 'suppliers')} as the strongest retention or consolidation targets, and {count_label(monitor_count, 'supplier', 'suppliers')} that still warrant active oversight."
+        f"The current portfolio points to {count_label(exit_count, 'supplier', 'suppliers')} as the clearest exit or de-prioritization candidate, {count_label(keep_count, 'supplier', 'suppliers')} as the strongest retention or consolidation targets, and {count_label(monitor_count, 'supplier', 'suppliers')} that still warrants active oversight."
     )
     single_source_sentence = (
-        f"Single-source exposure remains meaningful across {count_label(len(single_source_components), 'component', 'components')}, led by {format_name_list(single_source_components, max_items=4)}."
+        f"The supply base still has meaningful single-source exposure across {count_label(len(single_source_components), 'component', 'components')}, led by {format_name_list(single_source_components, max_items=4)}."
         if single_source_components
         else "No components are currently single-sourced in the active view, which materially reduces continuity concentration."
     )
     risk_sentence = (
-        f"Risk and performance pressure are most visible in {format_name_list(high_risk_components, max_items=4)}, while the current supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
+        f"The clearest risk and performance concerns sit in {format_name_list(high_risk_components, max_items=4)}, while the current supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
         if high_risk_components
-        else f"Risk and performance pressure are comparatively contained, with the current supplier base running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
+        else f"Risk and performance are comparatively contained, with the current supplier base running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
     )
     next_focus = (
-        "Leadership should use this scenario-adjusted view to confirm the supplier set, lock mitigation assignments, and move the approved changes into execution."
+        "We should use this scenario-adjusted view to confirm the supplier set, lock mitigation assignments, and move the approved changes into execution."
         if scenario_applied
-        else "Leadership should next validate the proposed exit and consolidation moves, then use scenario analysis to reduce exposure without giving up too much coverage or savings."
+        else "We should next validate the proposed exit and consolidation moves, then use scenario analysis to reduce exposure without giving up too much coverage or savings."
     )
     sentences = [concentration_sentence, decision_sentence, single_source_sentence, risk_sentence]
     if highest_priority_action:
@@ -3954,21 +3985,20 @@ def render_executive_dashboard(
 
     render_kpi_cards(component_summary, supplier_summary)
     st.markdown('<div class="executive-section-title">Executive Summary</div>', unsafe_allow_html=True)
-    st.write(
-        build_executive_dashboard_summary(
-            analytics,
-            executive_actions,
-            summary_text=summary_text,
-            scenario_applied=scenario_applied,
-        )
+    executive_summary = build_executive_dashboard_summary(
+        analytics,
+        executive_actions,
+        summary_text=summary_text,
+        scenario_applied=scenario_applied,
     )
+    render_narrative_text(executive_summary, class_name="executive-summary-card")
 
     st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
     st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
     st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure. Bubble color shows the current supplier decision recommendation.")
 
     st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
-    st.write(build_decision_mix_summary_text(supplier_summary))
+    render_narrative_text(build_decision_mix_summary_text(supplier_summary))
     st.caption("This summary shows how much supplier spend sits in each decision category and which suppliers drive those decision buckets.")
 
     st.markdown('<div class="executive-section-title">Priority Supplier Actions</div>', unsafe_allow_html=True)
@@ -4775,7 +4805,7 @@ def render_app():
         st.write("Review the active data source, how core procurement fields were interpreted, and what the normalized input looks like before using the downstream portfolio views.")
         st.caption(data_source_label)
         with st.expander("Data Quality & Inferred Fields", expanded=True):
-            st.write(build_data_quality_summary(input_field_status))
+            render_narrative_text(build_data_quality_summary(input_field_status))
             if input_diagnostics:
                 for note in input_diagnostics:
                     st.write(f"- {note}")
@@ -4786,7 +4816,7 @@ def render_app():
 
     with tabs[3]:
         st.subheader("Supplier Spend Analysis")
-        st.write(build_supplier_spend_summary(supplier_summary, component_summary))
+        render_narrative_text(build_supplier_spend_summary(supplier_summary, component_summary))
         st.altair_chart(build_supplier_metric_chart(supplier_summary, "spend", "Spend"), width="stretch")
         st.subheader("Supplier Decision Overview")
         st.caption("This view shows how supplier spend aligns to the current decision model so leaders can see where the largest keep, monitor, and exit calls sit.")
@@ -4799,14 +4829,14 @@ def render_app():
 
     with tabs[2]:
         st.subheader("Component Spend Analysis")
-        st.write(build_component_spend_summary(component_summary))
+        render_narrative_text(build_component_spend_summary(component_summary))
         st.altair_chart(build_component_risk_bar_chart(component_summary, "spend", "Spend", top_n=None), width="stretch")
         st.subheader("Component Analysis")
-        st.write(build_component_analysis_summary(component_summary))
+        render_narrative_text(build_component_analysis_summary(component_summary))
         st.caption("Bubble size shows strategic priority, color shows sourcing risk, and red bubbles highlight single-source components.")
         st.altair_chart(build_component_analysis_bubble_chart(component_summary), width="stretch")
         st.subheader("Component-Supplier Detail")
-        st.write(build_component_supplier_detail_summary(component_supplier_detail))
+        render_narrative_text(build_component_supplier_detail_summary(component_supplier_detail))
         st.caption("This visual shows how each component's effective supply coverage is split across its suppliers. In an applied scenario, mitigation suppliers count toward the visible coverage share even if current awarded spend has not shifted yet. Longer single-color bars indicate concentrated coverage, while more segmented bars indicate broader backup depth.")
         st.altair_chart(build_component_supplier_detail_chart(component_supplier_detail, top_n=None), width="stretch")
         show_table(
@@ -4851,7 +4881,7 @@ def render_app():
 
     with tabs[5]:
         st.subheader("Spend Pareto (ABC)")
-        st.write(build_pareto_summary(spend_pareto, risk_pareto, strategic_pareto))
+        render_narrative_text(build_pareto_summary(spend_pareto, risk_pareto, strategic_pareto))
         st.caption("This visual shows which components account for most of total spend. The bars show each component's individual spend, and the line shows the cumulative share so you can see where the A, B, and C breakpoints occur. A-items are the small set of components driving the largest cumulative share of spend and should get the most commercial attention.")
         st.altair_chart(
             build_pareto_chart(spend_pareto, "component", "spend", "spend_cum_share", "spend_abc", "Component", "Spend"),
@@ -4860,7 +4890,7 @@ def render_app():
         show_table(spend_pareto[["component", "spend", "spend_cum_share", "spend_abc"]])
 
         st.subheader("Risk-Adjusted Pareto")
-        st.write(build_risk_adjusted_pareto_summary(risk_pareto))
+        render_narrative_text(build_risk_adjusted_pareto_summary(risk_pareto))
         st.caption("This visual shows risk-adjusted spend by component. The bars show each component's individual risk-adjusted burden, and the line shows the cumulative share so you can see where the A, B, and C breakpoints occur. The tooltip and table below show the actual sourcing risk tier for each component.")
         st.altair_chart(
             build_pareto_chart(
@@ -4905,7 +4935,7 @@ def render_app():
 
     with tabs[2]:
         st.subheader("Risk Analysis")
-        st.write(build_risk_analysis_summary(component_summary, supplier_risk_assessment))
+        render_narrative_text(build_risk_analysis_summary(component_summary, supplier_risk_assessment))
         st.caption(
             "This visual ranks components by modeled supply risk so teams can see which items are most exposed. "
             "The components at the top of the chart are the ones most likely to need mitigation, backup qualification, or closer supplier management. "
@@ -4918,7 +4948,7 @@ def render_app():
             ]
         )
         st.subheader("Kraljic Positioning")
-        st.write(build_kraljic_positioning_summary(component_summary))
+        render_narrative_text(build_kraljic_positioning_summary(component_summary))
         st.caption(build_risk_score_methodology_note())
         st.altair_chart(build_kraljic_chart(component_summary), width="stretch")
         show_table(
@@ -4927,7 +4957,7 @@ def render_app():
             ]
         )
         st.subheader("Supplier Concentration")
-        st.write(build_supplier_concentration_summary(component_summary))
+        render_narrative_text(build_supplier_concentration_summary(component_summary))
         left, right = st.columns(2)
         with left:
             st.caption("This visual shows the largest-supplier share for each component so concentration risk is easy to spot. Components with bars extending farthest to the right have the highest concentration and are the most exposed to supplier disruption.")
@@ -5754,7 +5784,7 @@ def render_app():
         for visual in visual_pack:
             st.markdown(f"### {visual['title']}")
             if visual.get("summary"):
-                st.write(visual["summary"])
+                render_narrative_text(visual["summary"])
             if visual["title"] == "Spend by Supplier":
                 st.altair_chart(build_supplier_metric_chart(supplier_summary, "spend", "Spend"), width="stretch")
             elif visual["title"] == "Spend by Component":
