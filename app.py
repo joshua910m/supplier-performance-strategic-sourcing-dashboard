@@ -4907,7 +4907,7 @@ def render_app():
 
     with tabs[1]:
         st.subheader("Data Quality & Inputs")
-        st.write("Review the active data source, how core procurement fields were interpreted, and what the normalized input looks like before using the downstream portfolio views.")
+        render_narrative_text("Review the active data source, how core procurement fields were interpreted, and what the normalized input looks like before using the downstream portfolio views.")
         st.caption(data_source_label)
         with st.expander("Data Quality & Inferred Fields", expanded=True):
             render_narrative_text(build_data_quality_summary(input_field_status))
@@ -5596,7 +5596,7 @@ def render_app():
         c1.metric("Existing Single-Source Fixed", f"{len(resolved_single_source_names)}")
         c2.metric("Single-Sources Left", f"{len(remaining_single_source_names)}")
         c3.metric("New Single-Sources Introduced", f"{len(new_single_source_names)}")
-        c4.metric("High-Risk Change", f"{scenario_high_risk_count - base_high_risk_count:+d}")
+        c4.metric("High-Risk Components Left", f"{scenario_high_risk_count}")
 
         c5, c6, c7, c8 = st.columns(4)
         c5.metric("Existing Uncovered Fixed", f"{fixed_uncovered_count}")
@@ -5784,7 +5784,7 @@ def render_app():
         st.subheader("Supplier Consolidation Plan")
         if not scenario_applied:
             st.caption("Base view: treat these as scenario-testing prompts, not approved supplier moves.")
-        st.write(
+        render_narrative_text(
             (
                 "This visual shows how supplier spend lines up with the current scenario-test logic, so teams can see which suppliers may be worth testing for consolidation, closer review, or exit exposure. "
                 + (
@@ -5814,7 +5814,7 @@ def render_app():
             if not supplier_risk_assessment.empty and "Risk Tier" in supplier_risk_assessment.columns
             else []
         )
-        st.write(
+        render_narrative_text(
             "This visual shows which suppliers combine operational weakness and exposure risk, so teams know where supplier-management effort is most urgent. "
             + (
                 f"{top_supplier_risk['supplier']} has the highest supplier risk score at {top_supplier_risk['supplier_risk_score']:.1f}, "
@@ -5833,7 +5833,7 @@ def render_app():
         st.subheader("Strategic Sourcing Plan")
         strategic_components = component_summary.loc[component_summary["kraljic_quadrant"].eq("Strategic"), "component"].tolist()
         top_strategic_component = component_summary.sort_values("strategic_priority_score", ascending=False).iloc[0] if not component_summary.empty else None
-        st.write(
+        render_narrative_text(
             "This visual helps show which components need executive attention because they combine supply risk with business impact. "
             + (
                 f"The Strategic quadrant currently includes {', '.join(strategic_components[:5]) if strategic_components else 'no components'}, "
@@ -5849,14 +5849,14 @@ def render_app():
         display_assumptions("Assumptions", strategic_sourcing_assumptions)
 
         st.subheader("Step-by-Step Action Plan")
-        st.write(
+        render_narrative_text(
             "This sequenced plan translates the supplier and component findings into a practical order of operations so the analyst can move from diagnosis to action without skipping exposure checks."
         )
         show_table(step_plan)
 
     with tabs[7]:
         st.subheader("Executive Visuals & Downloads")
-        st.write("Use a single decision pipeline to align spend prioritization, supply risk, supplier actions, and executive messaging.")
+        render_narrative_text("Use a single decision pipeline to align spend prioritization, supply risk, supplier actions, and executive messaging.")
         bundle = make_download_bundle(
             {
                 "normalized_data": normalized_df,
@@ -5902,7 +5902,7 @@ def render_app():
         top_risk = component_summary.sort_values("supply_risk_score", ascending=False).head(3)["component"].tolist()
         top_priority = component_summary.sort_values("strategic_priority_score", ascending=False).head(3)["component"].tolist()
         retained = supplier_summary.loc[supplier_summary["decision"] == "Keep / Consolidate To", "supplier"].tolist()
-        st.write(
+        render_narrative_text(
             f"Highest-risk components: {', '.join(top_risk)}. Highest strategic priorities: {', '.join(top_priority)}. "
             f"Retain/consolidate suppliers: {', '.join(retained) if retained else 'none'}."
         )
