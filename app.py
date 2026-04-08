@@ -3675,6 +3675,9 @@ def build_executive_dashboard_summary(
         if {"avg_lead_time", "spend"}.issubset(supplier_summary.columns)
         else 0.0
     )
+    def count_label(count: int, singular: str, plural: str) -> str:
+        return f"{count} {singular if count == 1 else plural}"
+
     highest_priority_action = ""
     if not executive_actions.empty and "Supplier" in executive_actions.columns:
         top_action_row = executive_actions.iloc[0]
@@ -3682,31 +3685,31 @@ def build_executive_dashboard_summary(
         action_text = str(top_action_row.get("Recommended Action", "")).strip()
         if action_supplier:
             highest_priority_action = (
-                f"The highest-priority supplier action currently centers on {action_supplier.lower()}, where the dashboard recommends {action_text.lower()}."
+                f"The most urgent supplier action is to address {action_supplier}, where the current recommendation is to {action_text.lower()}."
                 if action_text
-                else f"The highest-priority supplier action currently centers on {action_supplier.lower()}."
+                else f"The most urgent supplier action is to address {action_supplier}."
             )
 
     concentration_sentence = (
         f"Spend is concentrated most heavily with {top_supplier['supplier']} at {format_currency_compact(top_supplier['spend'])}, while {top_component['component']} is the largest component category at {format_currency_compact(top_component['spend'])}."
     )
     decision_sentence = (
-        f"The current supplier portfolio points to {exit_count} suppliers that look most replaceable, {keep_count} suppliers that remain the strongest consolidation or retention candidates, and {monitor_count} suppliers that warrant ongoing oversight."
+        f"The current portfolio identifies {count_label(exit_count, 'supplier', 'suppliers')} as the clearest exit or de-prioritization candidate, {count_label(keep_count, 'supplier', 'suppliers')} as the strongest retention or consolidation targets, and {count_label(monitor_count, 'supplier', 'suppliers')} that still warrant active oversight."
     )
     single_source_sentence = (
-        f"Single-source exposure remains meaningful in {len(single_source_components)} components, led by {format_name_list(single_source_components, max_items=4)}."
+        f"Single-source exposure remains meaningful across {count_label(len(single_source_components), 'component', 'components')}, led by {format_name_list(single_source_components, max_items=4)}."
         if single_source_components
         else "No components are currently single-sourced in the active view, which materially reduces continuity concentration."
     )
     risk_sentence = (
-        f"Risk and performance pressure remain most visible in {format_name_list(high_risk_components, max_items=4)}, while the current supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
+        f"Risk and performance pressure are most visible in {format_name_list(high_risk_components, max_items=4)}, while the current supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
         if high_risk_components
         else f"Risk and performance pressure are comparatively contained, with the current supplier base running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defect burden and {avg_lead_time:,.1f} days average lead time."
     )
     next_focus = (
         "Leadership should use this scenario-adjusted view to confirm the supplier set, lock mitigation assignments, and move the approved changes into execution."
         if scenario_applied
-        else "Leadership should focus next on validating the exit and consolidation recommendations, then use scenario testing to reduce exposure without sacrificing too much coverage or savings."
+        else "Leadership should next validate the proposed exit and consolidation moves, then use scenario analysis to reduce exposure without giving up too much coverage or savings."
     )
     sentences = [concentration_sentence, decision_sentence, single_source_sentence, risk_sentence]
     if highest_priority_action:
