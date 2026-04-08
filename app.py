@@ -3311,7 +3311,7 @@ def build_post_scenario_negotiation_plan(
             "base_portfolio_share_pct": "Base Portfolio Share",
             "scenario_portfolio_share_pct": "Scenario Portfolio Share",
             "spend_gain": "Spend Change",
-            "share_gain_points": "Portfolio Share Change",
+            "share_change_points": "Portfolio Share Change",
             "negotiation_leverage_score": "Negotiation Leverage Score",
         }
     )[
