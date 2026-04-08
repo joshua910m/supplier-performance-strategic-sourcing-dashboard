@@ -76,57 +76,57 @@ st.markdown(
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(1),
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(1) {
-        background: #1f4e79 !important;
-        border-color: #1f4e79 !important;
+        background: #475569 !important;
+        border-color: #475569 !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(2),
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(2) {
-        background: #0f766e !important;
-        border-color: #0f766e !important;
+        background: #1f4e79 !important;
+        border-color: #1f4e79 !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(3),
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(3) {
-        background: #b45309 !important;
-        border-color: #b45309 !important;
+        background: #0f766e !important;
+        border-color: #0f766e !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(4),
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(4) {
-        background: #7c3aed !important;
-        border-color: #7c3aed !important;
+        background: #b45309 !important;
+        border-color: #b45309 !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(5),
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) {
+        background: #7c3aed !important;
+        border-color: #7c3aed !important;
+    }
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6),
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6) {
         background: #b91c1c !important;
         border-color: #b91c1c !important;
         animation: scenarioPulse 1.4s ease-in-out infinite !important;
         outline: 2px solid rgba(255, 244, 214, 0.55) !important;
         outline-offset: 1px !important;
     }
-    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"],
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] {
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6)[aria-selected="true"],
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6)[aria-selected="true"] {
         animation: none !important;
         outline: none !important;
     }
-    div[role="tablist"] > button[role="tab"]:nth-of-type(5) p,
-    div[role="tablist"] > button[role="tab"]:nth-of-type(5) div,
-    div[role="tablist"] > button[role="tab"]:nth-of-type(5) span,
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) p,
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) div,
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) span {
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6) p,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6) div,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6) span,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6) p,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6) div,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6) span {
         animation: scenarioTextPulse 1.4s ease-in-out infinite !important;
     }
-    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"] p,
-    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"] div,
-    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"] span,
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] p,
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] div,
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] span {
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6)[aria-selected="true"] p,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6)[aria-selected="true"] div,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(6)[aria-selected="true"] span,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6)[aria-selected="true"] p,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6)[aria-selected="true"] div,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6)[aria-selected="true"] span {
         animation: none !important;
-    }
-    div[role="tablist"] > button[role="tab"]:nth-of-type(6),
-    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(6) {
-        background: #475569 !important;
-        border-color: #475569 !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(7),
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(7) {
