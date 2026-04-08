@@ -2420,6 +2420,51 @@ def build_auto_mitigation_assignments(
     return tuple(sorted(set(assignments)))
 
 
+def describe_recommended_backup_supplier(
+    analytics: Dict[str, pd.DataFrame],
+    component_name: str,
+    recommended_supplier: str,
+    incumbent_supplier: str = "",
+    mitigation_kind: str = "single_source",
+) -> str:
+    supplier_summary = analytics["supplier_summary"].copy()
+    detail = analytics["component_supplier_detail"].copy()
+
+    recommended_match = supplier_summary.loc[supplier_summary["supplier"].eq(recommended_supplier)]
+    recommended_bits: List[str] = []
+    if not recommended_match.empty:
+        recommended_row = recommended_match.iloc[0]
+        recommended_bits.append(f"risk score {float(recommended_row.get('supplier_risk_score', 0.0)):.1f}")
+        recommended_bits.append(f"performance score {float(recommended_row.get('performance_score', 0.0)):.1f}")
+        recommended_bits.append(f"lead time {float(recommended_row.get('avg_lead_time', 0.0)):.1f} days")
+
+    if mitigation_kind == "single_source" and incumbent_supplier:
+        return (
+            f"{recommended_supplier} is recommended because {incumbent_supplier} is the current incumbent and cannot serve as its own backup. "
+            + (
+                f"Among the remaining options, {recommended_supplier} ranked best on "
+                + ", ".join(recommended_bits[:3])
+                + "."
+                if recommended_bits
+                else f"Among the remaining options, {recommended_supplier} ranked best on the app's mitigation criteria."
+            )
+        )
+
+    component_options = detail.loc[detail["component"].eq(component_name)].copy()
+    if not component_options.empty and recommended_supplier in component_options["supplier"].astype(str).tolist():
+        return (
+            f"{recommended_supplier} is recommended because it already appears against {component_name} in the current data and ranked best on "
+            + (", ".join(recommended_bits[:3]) if recommended_bits else "quality, lead time, and risk")
+            + "."
+        )
+
+    return (
+        f"{recommended_supplier} is recommended as the best fallback supplier based on "
+        + (", ".join(recommended_bits[:3]) if recommended_bits else "the app's mitigation ranking criteria")
+        + "."
+    )
+
+
 def get_required_single_source_suppliers(analytics: Dict[str, pd.DataFrame]) -> Tuple[str, ...]:
     component_summary = analytics["component_summary"].copy()
     required_suppliers = (
@@ -4376,6 +4421,66 @@ def build_decision_mix_summary_text(supplier_summary: pd.DataFrame) -> str:
     return "Decision mix by spend: " + "; ".join(parts) + "."
 
 
+def build_remaining_supplier_qualification_text(
+    action_supplier_summary: Optional[pd.DataFrame],
+    negotiation_plan: Optional[pd.DataFrame] = None,
+) -> str:
+    if action_supplier_summary is None or action_supplier_summary.empty:
+        return "No scenario-based supplier qualification actions are available for the current dashboard view."
+
+    summary = action_supplier_summary.copy()
+    if "supplier" not in summary.columns and "Supplier" in summary.columns:
+        summary = summary.rename(columns={"Supplier": "supplier"})
+
+    selected_suppliers = summary.loc[summary.get("scenario_role", pd.Series(dtype=str)).eq("Selected Supplier"), "supplier"].astype(str).tolist()
+    mitigation_only_suppliers = summary.loc[
+        summary.get("decision", pd.Series(dtype=str)).eq("Mitigation Only"), "supplier"
+    ].astype(str).tolist()
+    retained_with_mitigation = summary.loc[
+        summary.get("decision", pd.Series(dtype=str)).eq("Retained + Mitigation"), "supplier"
+    ].astype(str).tolist()
+    removed_suppliers = summary.loc[summary.get("scenario_role", pd.Series(dtype=str)).eq("Removed"), "supplier"].astype(str).tolist()
+
+    parts: List[str] = []
+    if selected_suppliers:
+        parts.append(
+            "Before the added volume is awarded, we should confirm capacity, service levels, and commercial readiness with "
+            + format_name_list(selected_suppliers, max_items=6)
+            + "."
+        )
+    if retained_with_mitigation:
+        parts.append(
+            "We should also qualify the backup role and response expectations for "
+            + format_name_list(retained_with_mitigation, max_items=6)
+            + " because they are carrying both primary and mitigation responsibilities in the scenario."
+        )
+    if mitigation_only_suppliers:
+        parts.append(
+            "For the mitigation-only suppliers "
+            + format_name_list(mitigation_only_suppliers, max_items=6)
+            + ", the remaining work is to validate qualification status, onboarding timing, and contingency activation steps before relying on them as true backups."
+        )
+    if negotiation_plan is not None and not negotiation_plan.empty:
+        negotiation_targets = negotiation_plan.loc[
+            negotiation_plan["Scenario Role"].eq("Selected Supplier")
+            & negotiation_plan["Potential Price Reduction"].ne("Not a primary negotiation target"),
+            "Supplier",
+        ].astype(str).tolist()
+        if negotiation_targets:
+            parts.append(
+                "Once qualification and award readiness are confirmed, we should use the revised volume position to pursue price, service, or lead-time concessions with "
+                + format_name_list(negotiation_targets, max_items=5)
+                + "."
+            )
+    if removed_suppliers:
+        parts.append(
+            "For the removed suppliers "
+            + format_name_list(removed_suppliers, max_items=6)
+            + ", the remaining action is to verify inventory, transition timing, and continuity safeguards before fully exiting new awards."
+        )
+    return " ".join(parts) if parts else "No additional supplier qualification actions are needed beyond the current scenario recommendations."
+
+
 def render_executive_dashboard(
     analytics: Dict[str, pd.DataFrame],
     executive_actions: pd.DataFrame,
@@ -4476,6 +4581,13 @@ def render_executive_dashboard(
                 "Recommended Action": st.column_config.TextColumn("Recommended Action", width="large"),
                 "Estimated Savings": st.column_config.NumberColumn("Estimated Savings", format="$%d", width="small"),
             },
+        )
+    if scenario_applied:
+        render_section_gap(10)
+        st.markdown('<div class="executive-section-title">Remaining Supplier Qualification Actions</div>', unsafe_allow_html=True)
+        render_narrative_text(
+            build_remaining_supplier_qualification_text(action_supplier_summary, negotiation_plan),
+            class_name="executive-summary-card",
         )
 
 
@@ -5784,6 +5896,18 @@ def render_app():
                         st.caption(
                             f"App recommendation for {component_name}: {', '.join(recommended_component_suppliers)}"
                         )
+                        render_narrative_text(
+                            " ".join(
+                                describe_recommended_backup_supplier(
+                                    base_analytics,
+                                    component_name,
+                                    supplier_name,
+                                    incumbent_supplier=incumbent_supplier,
+                                    mitigation_kind="single_source",
+                                )
+                                for supplier_name in recommended_component_suppliers
+                            )
+                        )
                     mitigation_choices = st.multiselect(
                         f"Mitigation suppliers for {component_name} (current supplier: {incumbent_supplier})",
                         options=mitigation_options,
@@ -5821,6 +5945,18 @@ def render_app():
                     if recommended_component_suppliers:
                         st.caption(
                             f"App recommendation for {component_name}: {', '.join(recommended_component_suppliers)}"
+                        )
+                        render_narrative_text(
+                            " ".join(
+                                describe_recommended_backup_supplier(
+                                    base_analytics,
+                                    component_name,
+                                    supplier_name,
+                                    incumbent_supplier=prior_supplier,
+                                    mitigation_kind="uncovered",
+                                )
+                                for supplier_name in recommended_component_suppliers
+                            )
                         )
                     pickup_choices = st.multiselect(
                         f"Pickup suppliers for uncovered component {component_name} (previous dominant supplier: {prior_supplier})",
