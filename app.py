@@ -4015,6 +4015,7 @@ def build_executive_dashboard_summary(
     summary_text: str = "",
     scenario_applied: bool = False,
     negotiation_plan: Optional[pd.DataFrame] = None,
+    action_supplier_summary: Optional[pd.DataFrame] = None,
 ) -> str:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
@@ -4095,7 +4096,36 @@ def build_executive_dashboard_summary(
             else f"We should next use the Scenario Analysis tab to validate the proposed exit and consolidation moves, address single-source and high-risk exposure, and {top_action_text.lower()}."
         )
     )
-    return " ".join([concentration_sentence, single_source_sentence, decision_sentence, risk_sentence, savings_sentence, next_focus])
+    qualification_sentence = ""
+    if scenario_applied and action_supplier_summary is not None and not action_supplier_summary.empty:
+        summary = action_supplier_summary.copy()
+        if "supplier" not in summary.columns and "Supplier" in summary.columns:
+            summary = summary.rename(columns={"Supplier": "supplier"})
+        selected_suppliers = summary.loc[summary.get("scenario_role", pd.Series(dtype=str)).eq("Selected Supplier"), "supplier"].astype(str).tolist()
+        mitigation_only_suppliers = summary.loc[
+            summary.get("decision", pd.Series(dtype=str)).eq("Mitigation Only"), "supplier"
+        ].astype(str).tolist()
+        removed_suppliers = summary.loc[summary.get("scenario_role", pd.Series(dtype=str)).eq("Removed"), "supplier"].astype(str).tolist()
+        qualification_parts: List[str] = []
+        if selected_suppliers:
+            qualification_parts.append(
+                f"confirm capacity and service readiness with {format_name_list(selected_suppliers, max_items=5)}"
+            )
+        if mitigation_only_suppliers:
+            qualification_parts.append(
+                f"qualify the backup role for {format_name_list(mitigation_only_suppliers, max_items=4)}"
+            )
+        if removed_suppliers:
+            qualification_parts.append(
+                f"verify transition controls for {format_name_list(removed_suppliers, max_items=4)}"
+            )
+        if qualification_parts:
+            qualification_sentence = "The remaining qualification work is to " + ", ".join(qualification_parts) + "."
+    sentences = [concentration_sentence, single_source_sentence, decision_sentence, risk_sentence, savings_sentence]
+    if qualification_sentence:
+        sentences.append(qualification_sentence)
+    sentences.append(next_focus)
+    return " ".join(sentences)
 
 
 def build_executive_summary_text(analytics: Dict[str, pd.DataFrame], scenario_applied: bool = False) -> str:
@@ -4525,6 +4555,7 @@ def render_executive_dashboard(
         summary_text=summary_text,
         scenario_applied=scenario_applied,
         negotiation_plan=negotiation_plan,
+        action_supplier_summary=action_supplier_summary,
     )
     render_narrative_text(executive_summary, class_name="executive-summary-card")
     render_minor_spacing()
