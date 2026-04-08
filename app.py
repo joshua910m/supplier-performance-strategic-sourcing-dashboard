@@ -4315,7 +4315,7 @@ def render_executive_dashboard(
     render_section_gap(10)
 
     st.markdown(
-        f'<div class="executive-section-title">{"Scenario Recommended Supplier Actions" if scenario_applied else "Priority Supplier Actions"}</div>',
+        f'<div class="executive-section-title">{"Scenario Based Proposed Supplier Actions" if scenario_applied else "Pre-Scenario Based Proposed Supplier Action"}</div>',
         unsafe_allow_html=True,
     )
     st.caption(
