@@ -3174,6 +3174,7 @@ def build_post_scenario_negotiation_plan(
     scenario_detail = scenario_analytics["component_supplier_detail"].copy()
 
     base_lookup = base_supplier_summary.set_index("supplier").to_dict(orient="index") if not base_supplier_summary.empty else {}
+    base_total_supplier_spend = float(pd.to_numeric(base_supplier_summary.get("spend", 0.0), errors="coerce").fillna(0.0).sum()) if not base_supplier_summary.empty else 0.0
     role_frame = scenario_plan_supplier_summary.copy()
     if "supplier" not in role_frame.columns and "Supplier" in role_frame.columns:
         role_frame = role_frame.rename(columns={"Supplier": "supplier"})
@@ -3213,10 +3214,19 @@ def build_post_scenario_negotiation_plan(
     leverage_frame["avg_component_supplier_count"] = leverage_frame["avg_component_supplier_count"].fillna(0.0).astype(float)
     leverage_frame["leverage_component_share"] = leverage_frame["leverage_component_share"].fillna(0.0).astype(float)
 
-    leverage_frame["base_spend"] = leverage_frame["supplier"].map(lambda name: float(base_lookup.get(name, {}).get("spend", 0.0)))
-    leverage_frame["base_portfolio_share"] = leverage_frame["supplier"].map(lambda name: float(base_lookup.get(name, {}).get("portfolio_share", 0.0)))
     leverage_frame["scenario_spend"] = pd.to_numeric(leverage_frame.get("spend", 0.0), errors="coerce").fillna(0.0)
-    leverage_frame["scenario_portfolio_share"] = pd.to_numeric(leverage_frame.get("portfolio_share", 0.0), errors="coerce").fillna(0.0)
+    scenario_total_supplier_spend = float(leverage_frame["scenario_spend"].sum()) if not leverage_frame.empty else 0.0
+    leverage_frame["base_spend"] = leverage_frame["supplier"].map(lambda name: float(base_lookup.get(name, {}).get("spend", 0.0)))
+    leverage_frame["base_portfolio_share"] = np.where(
+        base_total_supplier_spend > 0,
+        leverage_frame["base_spend"] / base_total_supplier_spend,
+        0.0,
+    )
+    leverage_frame["scenario_portfolio_share"] = np.where(
+        scenario_total_supplier_spend > 0,
+        leverage_frame["scenario_spend"] / scenario_total_supplier_spend,
+        0.0,
+    )
     leverage_frame["supplier_risk_score"] = pd.to_numeric(leverage_frame.get("supplier_risk_score", 0.0), errors="coerce").fillna(0.0)
     leverage_frame["base_portfolio_share_pct"] = leverage_frame["base_portfolio_share"] * 100.0
     leverage_frame["scenario_portfolio_share_pct"] = leverage_frame["scenario_portfolio_share"] * 100.0
