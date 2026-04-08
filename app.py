@@ -5361,6 +5361,19 @@ def render_app():
             f"{applied_scenario_metrics['mitigation_supplier_count']} mitigation suppliers, "
             f"{applied_scenario_metrics['covered_spend_share']:.0%} covered spend."
         )
+        base_supplier_count = int(base_analytics["supplier_summary"]["supplier"].nunique()) if not base_analytics["supplier_summary"].empty else 0
+        base_high_risk_count = int(base_analytics["component_summary"]["high_risk_flag"].sum()) if not base_analytics["component_summary"].empty and "high_risk_flag" in base_analytics["component_summary"].columns else 0
+        applied_high_risk_count = int(analytics["component_summary"]["high_risk_flag"].sum()) if not analytics["component_summary"].empty and "high_risk_flag" in analytics["component_summary"].columns else 0
+        st.caption(
+            "Base case reference: "
+            f"{base_supplier_count} suppliers, 0 mitigation suppliers, 100% covered spend, "
+            f"and {base_high_risk_count} high-risk components. "
+            "Applied scenario: "
+            f"{applied_scenario_metrics['selected_supplier_count']} selected suppliers, "
+            f"{applied_scenario_metrics['mitigation_supplier_count']} mitigation suppliers, "
+            f"{applied_scenario_metrics['covered_spend_share']:.0%} covered spend, "
+            f"and {applied_high_risk_count} high-risk components."
+        )
         if st.button("Revert To Base Dashboard", type="secondary"):
             st.session_state["applied_scenario"] = None
             save_persisted_scenario_state(
