@@ -5759,39 +5759,9 @@ def render_app():
         display_assumptions("Scenario assumptions", scenario_assumptions)
 
     with tabs[6]:
-        st.subheader("Executive Actions")
-        render_narrative_text(
-            "This view is the management summary. It highlights the suppliers that matter most at the portfolio level and the action leadership should prioritize first."
-        )
-        executive_actions_display = executive_actions.copy()
-        if not executive_actions_display.empty:
-            executive_actions_display["__sort_order"] = executive_actions_display["Executive Priority"].map(
-                {
-                    "Evaluate Exit Scenario": 1,
-                    "Eliminate / De-prioritize": 1,
-                    "Evaluate Consolidation Scenario": 2,
-                    "Keep / Consolidate To": 2,
-                    "Evaluate Monitoring Need": 3,
-                    "Keep and Monitor": 3,
-                }
-            ).fillna(9)
-            if "Estimated Savings" in executive_actions_display.columns:
-                executive_actions_display["__savings"] = pd.to_numeric(
-                    executive_actions_display["Estimated Savings"], errors="coerce"
-                ).fillna(0.0)
-            else:
-                executive_actions_display["__savings"] = 0.0
-            executive_actions_display = (
-                executive_actions_display
-                .sort_values(["__sort_order", "__savings", "Supplier"], ascending=[True, False, True])
-                .drop(columns=["__sort_order", "__savings"])
-                .head(10)
-                .reset_index(drop=True)
-            )
-        show_table(executive_actions_display)
         st.subheader("Supplier Action Plans")
         render_narrative_text(
-            "This view is the working table for analysts. It keeps the supplier-by-supplier reasoning and the more specific next step needed to validate or execute each recommendation."
+            "This is the working table for analysts and sourcing teams. It keeps the supplier-by-supplier reasoning and the more specific next step needed to validate or execute each recommendation."
         )
         if scenario_state and applied_scenario_metrics is not None:
             st.caption("Base vs. applied scenario supplier action plans")
