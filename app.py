@@ -3847,7 +3847,10 @@ def build_executive_summary_text(analytics: Dict[str, pd.DataFrame], scenario_ap
 
 
 def build_priority_actions_table(
-    supplier_summary: pd.DataFrame, supplier_action_plan: pd.DataFrame, executive_actions: pd.DataFrame
+    supplier_summary: pd.DataFrame,
+    supplier_action_plan: pd.DataFrame,
+    executive_actions: pd.DataFrame,
+    scenario_applied: bool = False,
 ) -> pd.DataFrame:
     if supplier_summary.empty:
         return pd.DataFrame(
@@ -3912,16 +3915,26 @@ def build_priority_actions_table(
     priority_frame["Recommended Action"] = priority_frame["Recommended Action"].fillna("Review the supplier position and convert the decision into an execution plan.")
     priority_frame["Key Issues"] = priority_frame["Key Issues"].fillna("No material issues captured.")
 
-    decision_priority = {
-        "Eliminate / De-prioritize": 1,
-        "Keep / Consolidate To": 2,
-        "Keep and Monitor": 3,
-    }
-    priority_frame["__decision_priority"] = priority_frame["Decision"].map(lambda value: decision_priority.get(str(value), 9))
-    priority_frame = priority_frame.sort_values(["__decision_priority", "Spend"], ascending=[True, False]).drop(columns="__decision_priority")
-    return priority_frame[
+    if scenario_applied and not supplier_action_plan.empty and "Supplier" in supplier_action_plan.columns:
+        scenario_order_lookup = {
+            str(name): idx for idx, name in enumerate(supplier_action_plan["Supplier"].astype(str).tolist(), start=1)
+        }
+        priority_frame["__scenario_order"] = priority_frame["Supplier"].map(lambda value: scenario_order_lookup.get(str(value), 999))
+        priority_frame = priority_frame.sort_values(["__scenario_order", "Spend"], ascending=[True, False]).drop(columns="__scenario_order")
+    else:
+        decision_priority = {
+            "Eliminate / De-prioritize": 1,
+            "Keep / Consolidate To": 2,
+            "Keep and Monitor": 3,
+        }
+        priority_frame["__decision_priority"] = priority_frame["Decision"].map(lambda value: decision_priority.get(str(value), 9))
+        priority_frame = priority_frame.sort_values(["__decision_priority", "Spend"], ascending=[True, False]).drop(columns="__decision_priority")
+    result = priority_frame[
         ["Supplier", "Spend", "Supplier Risk Score", "Decision", "Key Issues", "Recommended Action", "Estimated Savings"]
-    ].head(10).reset_index(drop=True)
+    ].reset_index(drop=True)
+    if not scenario_applied:
+        result = result.head(10)
+    return result
 
 
 def build_supplier_risk_scatter(supplier_summary: pd.DataFrame) -> alt.Chart:
@@ -4098,9 +4111,21 @@ def render_executive_dashboard(
 
     render_section_gap(10)
 
-    st.markdown('<div class="executive-section-title">Priority Supplier Actions</div>', unsafe_allow_html=True)
-    st.caption("Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers.")
-    priority_actions = build_priority_actions_table(supplier_summary, supplier_action_plan, executive_actions)
+    st.markdown(
+        f'<div class="executive-section-title">{"Scenario Recommended Supplier Actions" if scenario_applied else "Priority Supplier Actions"}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "This applied-scenario view lists the proposed action for every supplier so the full award, mitigation, monitoring, and exit structure is visible."
+        if scenario_applied
+        else "Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers."
+    )
+    priority_actions = build_priority_actions_table(
+        supplier_summary,
+        supplier_action_plan,
+        executive_actions,
+        scenario_applied=scenario_applied,
+    )
     if priority_actions.empty:
         st.info("No supplier action recommendations are available for the current view.")
     else:
