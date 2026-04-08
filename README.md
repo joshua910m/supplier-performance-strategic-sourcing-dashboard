@@ -94,3 +94,11 @@ This project is more than a dashboard. It demonstrates how analytics, business l
 This project demonstrates the ability to turn messy real-world procurement data into structured analytics that support actual business decisions. It combines data normalization, business logic, dashboard design, and supply chain frameworks in one practical tool rather than treating them as separate exercises.
 
 From a portfolio perspective, it shows how to build decision-support products instead of static reports: the app ingests imperfect source data, applies supplier and sourcing logic, and presents the results in a format that is usable for executive reviews, analyst workflows, and scenario-driven planning.
+
+This project demonstrates the ability to:
+- Transform messy real-world procurement data into structured, decision-ready analytics
+- Combine data engineering, business logic, and dashboard design into a single product
+- Apply supply chain and sourcing frameworks in a practical, usable tool
+- Build decision-support systems rather than static reporting dashboards
+
+It is designed to reflect real-world procurement and supply chain workflows, where data is imperfect, decisions are multi-factor, and outputs must be actionable.

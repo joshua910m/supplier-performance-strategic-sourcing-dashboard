@@ -3942,6 +3942,10 @@ def render_section_gap(height_px: int = 10) -> None:
     st.markdown(f"<div style='height:{height_px}px'></div>", unsafe_allow_html=True)
 
 
+def render_minor_spacing() -> None:
+    st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+
+
 def build_estimated_savings_opportunity(executive_actions: pd.DataFrame, supplier_summary: pd.DataFrame) -> float:
     if not executive_actions.empty and "Estimated Savings" in executive_actions.columns:
         savings = pd.to_numeric(executive_actions["Estimated Savings"], errors="coerce").fillna(0.0)
@@ -4504,7 +4508,7 @@ def render_executive_dashboard(
         return
 
     render_kpi_cards(component_summary, supplier_summary)
-    render_section_gap(8)
+    render_minor_spacing()
     st.markdown('<div class="executive-section-title">Executive Summary</div>', unsafe_allow_html=True)
     executive_summary = build_executive_dashboard_summary(
         analytics,
@@ -4514,9 +4518,11 @@ def render_executive_dashboard(
         negotiation_plan=negotiation_plan,
     )
     render_narrative_text(executive_summary, class_name="executive-summary-card")
-    render_section_gap(10)
+    render_minor_spacing()
 
-    st.caption("These visuals show where supplier risk, quality, and spend concentration intersect.")
+    st.markdown("### Risk, Performance, and Spend Interaction")
+    st.caption("These visuals highlight where supplier risk, quality, and spend concentration intersect.")
+    render_minor_spacing()
     left_col, right_col = st.columns(2)
     with left_col:
         st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
@@ -4530,7 +4536,7 @@ def render_executive_dashboard(
         st.caption("This chart shows how much spend sits in each supplier decision category and which suppliers drive the largest share of each bucket.")
         render_narrative_text(build_decision_mix_summary_text(supplier_summary))
 
-    render_section_gap(10)
+    render_minor_spacing()
     if scenario_applied and negotiation_plan is not None and not negotiation_plan.empty:
         total_negotiation_savings = float(
             pd.to_numeric(negotiation_plan.get("Potential Incremental Savings", pd.Series(dtype=float)), errors="coerce")
@@ -4546,7 +4552,7 @@ def render_executive_dashboard(
         st.caption(
             f"Estimated incremental negotiation upside from the applied scenario is about {format_currency_compact(total_negotiation_savings)} on top of the structural scenario savings already shown above."
         )
-        render_section_gap(10)
+        render_minor_spacing()
 
     st.markdown(
         f'<div class="executive-section-title">{"Scenario Based Proposed Supplier Actions" if scenario_applied else "Pre-Scenario Based Proposed Supplier Action"}</div>',
@@ -4566,24 +4572,36 @@ def render_executive_dashboard(
         negotiation_plan=negotiation_plan,
     )
     if priority_actions.empty:
-        st.info("No supplier action recommendations are available for the current view.")
+        st.info("No priority supplier actions identified for the current dataset or scenario.")
     else:
+        priority_actions = priority_actions.copy()
+        priority_actions["priority_rank"] = priority_actions["Decision"].map(
+            {
+                "Eliminate / De-prioritize": 1,
+                "Keep / Consolidate To": 2,
+                "Keep and Monitor": 3,
+            }
+        ).fillna(9)
+        priority_actions = priority_actions.sort_values(["priority_rank", "Spend"], ascending=[True, False]).drop(columns=["priority_rank"])
+        priority_actions["Spend"] = pd.to_numeric(priority_actions["Spend"], errors="coerce").fillna(0.0).apply(lambda x: f"${x:,.0f}")
+        priority_actions["Estimated Savings"] = pd.to_numeric(priority_actions["Estimated Savings"], errors="coerce").fillna(0.0).apply(lambda x: f"${x:,.0f}")
+        priority_actions["Supplier Risk Score"] = pd.to_numeric(priority_actions["Supplier Risk Score"], errors="coerce").fillna(0.0).round(1)
         st.dataframe(
             priority_actions,
-            width="stretch",
+            use_container_width=True,
             hide_index=True,
             column_config={
                 "Supplier": st.column_config.TextColumn("Supplier", width="medium"),
-                "Spend": st.column_config.NumberColumn("Spend", format="$%d", width="small"),
+                "Spend": st.column_config.TextColumn("Spend", width="small"),
                 "Supplier Risk Score": st.column_config.NumberColumn("Supplier Risk Score", format="%.1f", width="small"),
                 "Decision": st.column_config.TextColumn("Decision", width="medium"),
                 "Key Issues": st.column_config.TextColumn("Key Issues", width="medium"),
                 "Recommended Action": st.column_config.TextColumn("Recommended Action", width="large"),
-                "Estimated Savings": st.column_config.NumberColumn("Estimated Savings", format="$%d", width="small"),
+                "Estimated Savings": st.column_config.TextColumn("Estimated Savings", width="small"),
             },
         )
     if scenario_applied:
-        render_section_gap(10)
+        render_minor_spacing()
         st.markdown('<div class="executive-section-title">Remaining Supplier Qualification Actions</div>', unsafe_allow_html=True)
         render_narrative_text(
             build_remaining_supplier_qualification_text(action_supplier_summary, negotiation_plan),
