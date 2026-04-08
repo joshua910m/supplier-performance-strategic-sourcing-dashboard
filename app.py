@@ -3812,7 +3812,11 @@ def build_supplier_risk_scatter(supplier_summary: pd.DataFrame) -> alt.Chart:
 
     chart_data = supplier_summary.copy()
     color_scale = alt.Scale(domain=DECISION_DOMAIN, range=DECISION_RANGE)
-    return (
+    label_count = min(8, len(chart_data))
+    label_data = chart_data.sort_values("spend", ascending=False).head(label_count).copy()
+    label_data["label_y"] = label_data["defect_rate"] + max(float(chart_data["defect_rate"].max()) * 0.02, 0.15)
+
+    bubbles = (
         alt.Chart(chart_data)
         .mark_circle(opacity=0.8, stroke="#ffffff", strokeWidth=1.2)
         .encode(
@@ -3829,6 +3833,25 @@ def build_supplier_risk_scatter(supplier_summary: pd.DataFrame) -> alt.Chart:
                 alt.Tooltip("decision:N", title="Decision"),
             ],
         )
+    )
+    labels = (
+        alt.Chart(label_data)
+        .mark_text(
+            dy=-10,
+            fontSize=11,
+            fontWeight="bold",
+            color="#1f2937",
+            stroke="#ffffff",
+            strokeWidth=2,
+        )
+        .encode(
+            x=alt.X("avg_lead_time:Q"),
+            y=alt.Y("label_y:Q"),
+            text=alt.Text("supplier:N"),
+        )
+    )
+    return (
+        (bubbles + labels)
         .properties(height=380)
         .configure_axis(labelFontSize=11, titleFontSize=13)
         .configure_legend(labelFontSize=11, titleFontSize=12)
@@ -3844,9 +3867,10 @@ def build_decision_mix_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
     chart_data = (
         supplier_summary.groupby("decision", as_index=False)["spend"].sum()
         .assign(decision_order=lambda df: df["decision"].map({name: idx for idx, name in enumerate(DECISION_DOMAIN, start=1)}))
+        .assign(spend_label=lambda df: df["spend"].map(format_currency_compact))
         .sort_values("decision_order")
     )
-    return (
+    bars = (
         alt.Chart(chart_data)
         .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
         .encode(
@@ -3858,6 +3882,18 @@ def build_decision_mix_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
                 alt.Tooltip("spend:Q", title="Spend", format="$,.0f"),
             ],
         )
+    )
+    labels = (
+        alt.Chart(chart_data)
+        .mark_text(dy=-10, fontSize=12, fontWeight="bold", color="#1f2937")
+        .encode(
+            x=alt.X("decision:N", sort=DECISION_DOMAIN),
+            y=alt.Y("spend:Q"),
+            text=alt.Text("spend_label:N"),
+        )
+    )
+    return (
+        (bars + labels)
         .properties(height=320)
         .configure_axis(labelFontSize=11, titleFontSize=13)
         .configure_legend(labelFontSize=11, titleFontSize=12)
@@ -3894,6 +3930,14 @@ def render_executive_dashboard(
         )
     )
 
+    st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
+    st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
+    st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure.")
+
+    st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
+    st.altair_chart(build_decision_mix_chart(supplier_summary), width="stretch")
+    st.caption("This chart shows how much supplier spend currently sits in each decision category, helping leadership see where the largest sourcing moves are concentrated.")
+
     st.markdown('<div class="executive-section-title">Priority Supplier Actions</div>', unsafe_allow_html=True)
     st.caption("Top supplier actions are ranked by strategic importance: exit candidates first, then consolidation targets, then monitored suppliers.")
     priority_actions = build_priority_actions_table(supplier_summary, supplier_action_plan, executive_actions)
@@ -3912,14 +3956,6 @@ def render_executive_dashboard(
             width="stretch",
             hide_index=True,
         )
-
-    st.markdown('<div class="executive-section-title">Supplier Risk vs Performance</div>', unsafe_allow_html=True)
-    st.altair_chart(build_supplier_risk_scatter(supplier_summary), width="stretch")
-    st.caption("Suppliers in the upper-right combine slower delivery and worse quality, while larger bubbles indicate higher spend exposure.")
-
-    st.markdown('<div class="executive-section-title">Decision Mix by Spend</div>', unsafe_allow_html=True)
-    st.altair_chart(build_decision_mix_chart(supplier_summary), width="stretch")
-    st.caption("This chart shows how much supplier spend currently sits in each decision category, helping leadership see where the largest sourcing moves are concentrated.")
 
 
 def display_assumptions(title: str, assumptions: List[str]):
