@@ -3156,6 +3156,8 @@ def build_post_scenario_negotiation_plan(
         "Supplier",
         "Scenario Role",
         "Scenario Spend",
+        "Base Portfolio Share",
+        "Scenario Portfolio Share",
         "Spend Change",
         "Portfolio Share Change",
         "Negotiation Leverage Score",
@@ -3216,9 +3218,12 @@ def build_post_scenario_negotiation_plan(
     leverage_frame["scenario_spend"] = pd.to_numeric(leverage_frame.get("spend", 0.0), errors="coerce").fillna(0.0)
     leverage_frame["scenario_portfolio_share"] = pd.to_numeric(leverage_frame.get("portfolio_share", 0.0), errors="coerce").fillna(0.0)
     leverage_frame["supplier_risk_score"] = pd.to_numeric(leverage_frame.get("supplier_risk_score", 0.0), errors="coerce").fillna(0.0)
+    leverage_frame["base_portfolio_share_pct"] = leverage_frame["base_portfolio_share"] * 100.0
+    leverage_frame["scenario_portfolio_share_pct"] = leverage_frame["scenario_portfolio_share"] * 100.0
     leverage_frame["spend_gain"] = (leverage_frame["scenario_spend"] - leverage_frame["base_spend"]).clip(lower=0.0)
-    leverage_frame["share_gain"] = (leverage_frame["scenario_portfolio_share"] - leverage_frame["base_portfolio_share"]).clip(lower=0.0)
-    leverage_frame["share_gain_points"] = leverage_frame["share_gain"] * 100.0
+    leverage_frame["share_change"] = leverage_frame["scenario_portfolio_share"] - leverage_frame["base_portfolio_share"]
+    leverage_frame["share_gain"] = leverage_frame["share_change"].clip(lower=0.0)
+    leverage_frame["share_change_points"] = leverage_frame["share_change"] * 100.0
     leverage_frame["competition_depth"] = (leverage_frame["avg_component_supplier_count"] - 1.0).clip(lower=0.0)
     leverage_frame["low_risk_factor"] = (100.0 - leverage_frame["supplier_risk_score"]).clip(lower=0.0, upper=100.0)
 
@@ -3303,6 +3308,8 @@ def build_post_scenario_negotiation_plan(
             "supplier": "Supplier",
             "scenario_role": "Scenario Role",
             "scenario_spend": "Scenario Spend",
+            "base_portfolio_share_pct": "Base Portfolio Share",
+            "scenario_portfolio_share_pct": "Scenario Portfolio Share",
             "spend_gain": "Spend Change",
             "share_gain_points": "Portfolio Share Change",
             "negotiation_leverage_score": "Negotiation Leverage Score",
@@ -3891,6 +3898,18 @@ def build_estimated_savings_opportunity(executive_actions: pd.DataFrame, supplie
     return 0.0
 
 
+def build_total_savings_opportunity(
+    executive_actions: pd.DataFrame,
+    supplier_summary: pd.DataFrame,
+    negotiation_plan: Optional[pd.DataFrame] = None,
+) -> float:
+    base_savings = build_estimated_savings_opportunity(executive_actions, supplier_summary)
+    if negotiation_plan is None or negotiation_plan.empty or "Potential Incremental Savings" not in negotiation_plan.columns:
+        return base_savings
+    negotiation_savings = pd.to_numeric(negotiation_plan["Potential Incremental Savings"], errors="coerce").fillna(0.0)
+    return float(base_savings + negotiation_savings.sum())
+
+
 def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataFrame) -> None:
     total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns and not component_summary.empty else 0.0
     supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else 0
@@ -3936,6 +3955,7 @@ def build_executive_dashboard_summary(
     executive_actions: pd.DataFrame,
     summary_text: str = "",
     scenario_applied: bool = False,
+    negotiation_plan: Optional[pd.DataFrame] = None,
 ) -> str:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
@@ -3966,6 +3986,8 @@ def build_executive_dashboard_summary(
         return f"{count} {singular if count == 1 else plural}"
 
     estimated_savings = build_estimated_savings_opportunity(executive_actions, supplier_summary)
+    total_savings_opportunity = build_total_savings_opportunity(executive_actions, supplier_summary, negotiation_plan)
+    negotiation_savings = max(0.0, total_savings_opportunity - estimated_savings)
     top_action_text = ""
     if not executive_actions.empty and "Supplier" in executive_actions.columns:
         top_action_row = executive_actions.iloc[0]
@@ -3995,11 +4017,16 @@ def build_executive_dashboard_summary(
         if high_risk_components
         else f"The portfolio is relatively more stable on risk and performance, with roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defects and {avg_lead_time:,.1f} days average lead time across suppliers."
     )
-    savings_sentence = (
-        f"The identified supplier actions represent about {format_currency_compact(estimated_savings)} in modeled savings opportunity."
-        if estimated_savings > 0
-        else "The current view is primarily signaling risk and concentration priorities rather than a material modeled savings opportunity."
-    )
+    if scenario_applied and total_savings_opportunity > 0:
+        savings_sentence = (
+            f"The applied supplier moves represent about {format_currency_compact(estimated_savings)} in modeled structural savings, and the post-award negotiation upside adds roughly {format_currency_compact(negotiation_savings)} more, for total potential savings near {format_currency_compact(total_savings_opportunity)}."
+        )
+    else:
+        savings_sentence = (
+            f"The identified supplier actions represent about {format_currency_compact(estimated_savings)} in modeled savings opportunity."
+            if estimated_savings > 0
+            else "The current view is primarily signaling risk and concentration priorities rather than a material modeled savings opportunity."
+        )
     next_focus = (
         "We should confirm the applied supplier set, lock mitigation assignments, and move the approved changes into execution."
         if scenario_applied
@@ -4170,6 +4197,60 @@ def build_supplier_risk_scatter(supplier_summary: pd.DataFrame) -> alt.Chart:
     )
 
 
+def build_post_scenario_negotiation_chart(negotiation_plan: pd.DataFrame) -> alt.Chart:
+    if negotiation_plan.empty:
+        return alt.Chart(pd.DataFrame({"message": ["No post-scenario negotiation data is available for this view."]})).mark_text(
+            size=16, color="#64748b"
+        ).encode(text="message:N").properties(height=280)
+
+    chart_data = negotiation_plan.copy()
+    chart_data = chart_data.loc[
+        chart_data["Scenario Role"].eq("Selected Supplier")
+        & pd.to_numeric(chart_data["Potential Incremental Savings"], errors="coerce").fillna(0.0).gt(0.0)
+    ].copy()
+    if chart_data.empty:
+        return alt.Chart(pd.DataFrame({"message": ["No retained suppliers currently show meaningful negotiation upside."]})).mark_text(
+            size=16, color="#64748b"
+        ).encode(text="message:N").properties(height=280)
+
+    chart_data["Potential Incremental Savings"] = pd.to_numeric(
+        chart_data["Potential Incremental Savings"], errors="coerce"
+    ).fillna(0.0)
+    chart_data["Negotiation Leverage Score"] = pd.to_numeric(
+        chart_data["Negotiation Leverage Score"], errors="coerce"
+    ).fillna(0.0)
+    chart_data = chart_data.sort_values(
+        ["Potential Incremental Savings", "Negotiation Leverage Score"], ascending=[False, False]
+    ).head(8)
+
+    return (
+        alt.Chart(chart_data)
+        .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6)
+        .encode(
+            x=alt.X("Supplier:N", sort="-y", axis=alt.Axis(labelAngle=-25, labelLimit=180)),
+            y=alt.Y("Potential Incremental Savings:Q", title="Potential Incremental Savings"),
+            color=alt.Color(
+                "Negotiation Leverage Score:Q",
+                title="Negotiation Leverage Score",
+                scale=alt.Scale(scheme="teals"),
+            ),
+            tooltip=[
+                alt.Tooltip("Supplier:N", title="Supplier"),
+                alt.Tooltip("Scenario Spend:Q", title="Scenario Spend", format="$,.0f"),
+                alt.Tooltip("Base Portfolio Share:Q", title="Base Share", format=".1f"),
+                alt.Tooltip("Scenario Portfolio Share:Q", title="Scenario Share", format=".1f"),
+                alt.Tooltip("Portfolio Share Change:Q", title="Share Change (pts)", format=".1f"),
+                alt.Tooltip("Negotiation Leverage Score:Q", title="Negotiation Leverage Score", format=".1f"),
+                alt.Tooltip("Potential Price Reduction:N", title="Potential Price Reduction"),
+                alt.Tooltip("Potential Incremental Savings:Q", title="Potential Incremental Savings", format="$,.0f"),
+            ],
+        )
+        .properties(height=320)
+        .configure_axis(labelFontSize=11, titleFontSize=13)
+        .configure_legend(labelFontSize=11, titleFontSize=12)
+    )
+
+
 def build_decision_mix_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
     if supplier_summary.empty:
         return alt.Chart(pd.DataFrame({"message": ["No supplier decisions available for this view."]})).mark_text(
@@ -4295,6 +4376,7 @@ def render_executive_dashboard(
         executive_actions,
         summary_text=summary_text,
         scenario_applied=scenario_applied,
+        negotiation_plan=negotiation_plan,
     )
     render_narrative_text(executive_summary, class_name="executive-summary-card")
     render_section_gap(10)
@@ -4314,6 +4396,22 @@ def render_executive_dashboard(
         render_narrative_text(build_decision_mix_summary_text(supplier_summary))
 
     render_section_gap(10)
+    if scenario_applied and negotiation_plan is not None and not negotiation_plan.empty:
+        total_negotiation_savings = float(
+            pd.to_numeric(negotiation_plan.get("Potential Incremental Savings", pd.Series(dtype=float)), errors="coerce")
+            .fillna(0.0)
+            .sum()
+        )
+        st.markdown('<div class="executive-section-title">Post-Scenario Negotiation Potential</div>', unsafe_allow_html=True)
+        render_narrative_text(
+            "This chart highlights where the applied supplier structure creates the strongest follow-on bargaining position. It focuses on retained suppliers whose larger award share, competitive mix, and risk profile create the best case for additional price, service, or lead-time concessions."
+        )
+        st.altair_chart(build_post_scenario_negotiation_chart(negotiation_plan), width="stretch")
+        render_hover_hint("Hover over the visual to see share movement, leverage score, and potential incremental savings by supplier.")
+        st.caption(
+            f"Estimated incremental negotiation upside from the applied scenario is about {format_currency_compact(total_negotiation_savings)} on top of the structural scenario savings already shown above."
+        )
+        render_section_gap(10)
 
     st.markdown(
         f'<div class="executive-section-title">{"Scenario Based Proposed Supplier Actions" if scenario_applied else "Pre-Scenario Based Proposed Supplier Action"}</div>',
@@ -5912,6 +6010,8 @@ def render_app():
                     "Supplier": st.column_config.TextColumn("Supplier", width="medium"),
                     "Scenario Role": st.column_config.TextColumn("Scenario Role", width="small"),
                     "Scenario Spend": st.column_config.NumberColumn("Scenario Spend", format="$%d", width="small"),
+                    "Base Portfolio Share": st.column_config.NumberColumn("Base Share", format="%.1f%%", width="small"),
+                    "Scenario Portfolio Share": st.column_config.NumberColumn("Scenario Share", format="%.1f%%", width="small"),
                     "Spend Change": st.column_config.NumberColumn("Spend Change", format="$%d", width="small"),
                     "Portfolio Share Change": st.column_config.NumberColumn("Portfolio Share Change (pts)", format="%.1f", width="small"),
                     "Negotiation Leverage Score": st.column_config.NumberColumn("Negotiation Leverage Score", format="%.1f", width="small"),
