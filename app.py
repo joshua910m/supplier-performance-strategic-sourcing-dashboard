@@ -4061,7 +4061,7 @@ def build_executive_dashboard_summary(
                 top_action_text = "review quality, lead time, and exposure trends before deciding whether intervention is needed"
 
     concentration_sentence = (
-        f"The portfolio represents {format_currency_compact(total_spend)} across {supplier_count} suppliers and {component_count} components, with the heaviest concentration sitting with {top_supplier['supplier']} and {top_component['component']}."
+        f"{'The recommended scenario represents' if scenario_applied else 'The portfolio represents'} {format_currency_compact(total_spend)} across {supplier_count} suppliers and {component_count} components, with the heaviest concentration sitting with {top_supplier['supplier']} and {top_component['component']}."
     )
     single_source_sentence = (
         f"Structural exposure remains concentrated in {count_label(len(single_source_components), 'single-source component', 'single-source components')}, led by {format_name_list(single_source_components, max_items=4)}."
