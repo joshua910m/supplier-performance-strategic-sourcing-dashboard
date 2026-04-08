@@ -27,6 +27,16 @@ st.markdown(
             box-shadow: 0 0 0 4px rgba(255, 244, 214, 0.35) !important;
         }
     }
+    @keyframes scenarioTextPulse {
+        0%, 100% {
+            color: #ffffff;
+            text-shadow: 0 0 0 rgba(255, 248, 220, 0);
+        }
+        50% {
+            color: #fff7d6;
+            text-shadow: 0 0 10px rgba(255, 248, 220, 0.65);
+        }
+    }
     div[role="tablist"] > button[role="tab"],
     [data-baseweb="tab-list"] button[role="tab"] {
         color: #ffffff !important;
@@ -87,9 +97,28 @@ st.markdown(
         background: #b91c1c !important;
         border-color: #b91c1c !important;
         animation: scenarioPulse 1.4s ease-in-out infinite !important;
+        outline: 2px solid rgba(255, 244, 214, 0.55) !important;
+        outline-offset: 1px !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"],
     [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] {
+        animation: none !important;
+        outline: none !important;
+    }
+    div[role="tablist"] > button[role="tab"]:nth-of-type(5) p,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(5) div,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(5) span,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) p,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) div,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5) span {
+        animation: scenarioTextPulse 1.4s ease-in-out infinite !important;
+    }
+    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"] p,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"] div,
+    div[role="tablist"] > button[role="tab"]:nth-of-type(5)[aria-selected="true"] span,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] p,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] div,
+    [data-baseweb="tab-list"] button[role="tab"]:nth-of-type(5)[aria-selected="true"] span {
         animation: none !important;
     }
     div[role="tablist"] > button[role="tab"]:nth-of-type(6),
@@ -199,6 +228,17 @@ st.markdown(
         line-height: 1.65;
         margin: 0.15rem 0 0.45rem 0;
     }
+    .hover-hint {
+        background: linear-gradient(90deg, rgba(255, 247, 214, 0.92), rgba(254, 243, 199, 0.92));
+        border-left: 4px solid #d97706;
+        border-radius: 10px;
+        padding: 0.55rem 0.8rem;
+        color: #7c2d12;
+        font-size: 0.92rem;
+        font-weight: 700;
+        line-height: 1.45;
+        margin: 0.35rem 0 0.45rem 0;
+    }
     @media (prefers-color-scheme: dark) {
         .executive-kpi-card {
             background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.95));
@@ -225,6 +265,11 @@ st.markdown(
         }
         .narrative-text {
             color: #f8fafc;
+        }
+        .hover-hint {
+            background: linear-gradient(90deg, rgba(120, 53, 15, 0.75), rgba(146, 64, 14, 0.75));
+            border-left: 4px solid #fbbf24;
+            color: #fef3c7;
         }
     }
     </style>
@@ -3654,7 +3699,7 @@ def render_narrative_text(text: str, class_name: str = "narrative-text") -> None
 
 
 def render_hover_hint(text: str = "Hover over the visual to see supplier, component, spend, risk, and decision details.") -> None:
-    st.caption(text)
+    st.markdown(f'<div class="hover-hint">{html.escape(str(text))}</div>', unsafe_allow_html=True)
 
 
 def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataFrame) -> None:
