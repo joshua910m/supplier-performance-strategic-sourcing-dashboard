@@ -3283,7 +3283,7 @@ def build_post_scenario_negotiation_plan(
             return "This supplier is not carrying the primary awarded volume in the scenario."
         reasons: List[str] = []
         if float(row.get("spend_gain", 0.0)) > 0:
-            reasons.append(f"scenario spend increases by {format_currency(float(row.get('spend_gain', 0.0)))}")
+            reasons.append(f"scenario spend increases by {format_currency_compact(float(row.get('spend_gain', 0.0)))}")
         if float(row.get("share_gain", 0.0)) > 0:
             reasons.append(f"portfolio share rises by {float(row.get('share_gain', 0.0)):.1%}")
         if float(row.get("leverage_component_share", 0.0)) >= 0.25:
