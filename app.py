@@ -3147,6 +3147,180 @@ def build_applied_supplier_plan_analytics(
 
 
 @st.cache_data(show_spinner=False)
+def build_post_scenario_negotiation_plan(
+    base_analytics: Dict[str, pd.DataFrame],
+    scenario_analytics: Dict[str, pd.DataFrame],
+    scenario_plan_supplier_summary: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "Supplier",
+        "Scenario Role",
+        "Scenario Spend",
+        "Spend Change",
+        "Portfolio Share Change",
+        "Negotiation Leverage Score",
+        "Potential Price Reduction",
+        "Potential Incremental Savings",
+        "Negotiation Action",
+        "Why This Supplier Has Leverage",
+    ]
+    if scenario_plan_supplier_summary.empty:
+        return pd.DataFrame(columns=columns)
+
+    base_supplier_summary = base_analytics["supplier_summary"].copy()
+    scenario_component_summary = scenario_analytics["component_summary"].copy()
+    scenario_detail = scenario_analytics["component_supplier_detail"].copy()
+
+    base_lookup = base_supplier_summary.set_index("supplier").to_dict(orient="index") if not base_supplier_summary.empty else {}
+    role_frame = scenario_plan_supplier_summary.copy()
+    if "supplier" not in role_frame.columns and "Supplier" in role_frame.columns:
+        role_frame = role_frame.rename(columns={"Supplier": "supplier"})
+
+    if not scenario_detail.empty:
+        if "kraljic_quadrant" not in scenario_detail.columns and {"component", "kraljic_quadrant"}.issubset(scenario_component_summary.columns):
+            scenario_detail = scenario_detail.merge(
+                scenario_component_summary[["component", "kraljic_quadrant", "supplier_count"]],
+                on="component",
+                how="left",
+            )
+        component_mix = (
+            scenario_detail.groupby("supplier")
+            .agg(
+                supported_components=("component", "nunique"),
+                leverage_components=("kraljic_quadrant", lambda values: int(pd.Series(values).eq("Leverage").sum())),
+                avg_component_supplier_count=("supplier_count", "mean"),
+            )
+            .reset_index()
+        )
+        component_mix["leverage_component_share"] = np.where(
+            component_mix["supported_components"] > 0,
+            component_mix["leverage_components"] / component_mix["supported_components"],
+            0.0,
+        )
+    else:
+        component_mix = pd.DataFrame(
+            columns=["supplier", "supported_components", "leverage_components", "avg_component_supplier_count", "leverage_component_share"]
+        )
+
+    leverage_frame = role_frame.merge(component_mix, on="supplier", how="left")
+    for col in ["supported_components", "leverage_components", "avg_component_supplier_count", "leverage_component_share"]:
+        if col not in leverage_frame.columns:
+            leverage_frame[col] = 0.0
+    leverage_frame["supported_components"] = leverage_frame["supported_components"].fillna(0).astype(float)
+    leverage_frame["leverage_components"] = leverage_frame["leverage_components"].fillna(0).astype(float)
+    leverage_frame["avg_component_supplier_count"] = leverage_frame["avg_component_supplier_count"].fillna(0.0).astype(float)
+    leverage_frame["leverage_component_share"] = leverage_frame["leverage_component_share"].fillna(0.0).astype(float)
+
+    leverage_frame["base_spend"] = leverage_frame["supplier"].map(lambda name: float(base_lookup.get(name, {}).get("spend", 0.0)))
+    leverage_frame["base_portfolio_share"] = leverage_frame["supplier"].map(lambda name: float(base_lookup.get(name, {}).get("portfolio_share", 0.0)))
+    leverage_frame["scenario_spend"] = pd.to_numeric(leverage_frame.get("spend", 0.0), errors="coerce").fillna(0.0)
+    leverage_frame["scenario_portfolio_share"] = pd.to_numeric(leverage_frame.get("portfolio_share", 0.0), errors="coerce").fillna(0.0)
+    leverage_frame["supplier_risk_score"] = pd.to_numeric(leverage_frame.get("supplier_risk_score", 0.0), errors="coerce").fillna(0.0)
+    leverage_frame["spend_gain"] = (leverage_frame["scenario_spend"] - leverage_frame["base_spend"]).clip(lower=0.0)
+    leverage_frame["share_gain"] = (leverage_frame["scenario_portfolio_share"] - leverage_frame["base_portfolio_share"]).clip(lower=0.0)
+    leverage_frame["competition_depth"] = (leverage_frame["avg_component_supplier_count"] - 1.0).clip(lower=0.0)
+    leverage_frame["low_risk_factor"] = (100.0 - leverage_frame["supplier_risk_score"]).clip(lower=0.0, upper=100.0)
+
+    leverage_frame["negotiation_leverage_score"] = (
+        0.25 * scale_if_variable(leverage_frame["spend_gain"], default_value=0.0)
+        + 0.20 * scale_if_variable(leverage_frame["share_gain"], default_value=0.0)
+        + 0.20 * scale_if_variable(leverage_frame["scenario_spend"], default_value=0.0)
+        + 0.20 * scale_if_variable(leverage_frame["leverage_component_share"], default_value=leverage_frame["leverage_component_share"].mean() * 100 if len(leverage_frame) else 0.0)
+        + 0.15 * scale_if_variable(leverage_frame["competition_depth"], default_value=0.0)
+    ).round(1)
+    leverage_frame["negotiation_leverage_score"] = np.where(
+        leverage_frame.get("scenario_role", "").isin(["Selected Supplier"]),
+        leverage_frame["negotiation_leverage_score"] * (0.75 + 0.25 * (leverage_frame["low_risk_factor"] / 100.0)),
+        0.0,
+    ).round(1)
+
+    def estimate_price_reduction(row: pd.Series) -> Tuple[str, float]:
+        role = str(row.get("scenario_role", ""))
+        if role != "Selected Supplier":
+            return ("Not a primary negotiation target", 0.0)
+        score = float(row.get("negotiation_leverage_score", 0.0))
+        leverage_mix = float(row.get("leverage_component_share", 0.0))
+        supplier_risk = float(row.get("supplier_risk_score", 0.0))
+        if score >= 70:
+            pct_range = (0.020, 0.040)
+        elif score >= 55:
+            pct_range = (0.010, 0.025)
+        elif score >= 40:
+            pct_range = (0.005, 0.015)
+        else:
+            pct_range = (0.000, 0.010)
+        structural_cap = 1.0 if leverage_mix >= 0.50 else 0.75 if leverage_mix >= 0.25 else 0.55
+        risk_cap = 1.0 if supplier_risk <= 50 else 0.8 if supplier_risk <= 65 else 0.6
+        adjustment = min(structural_cap, risk_cap)
+        low_pct = pct_range[0] * adjustment
+        high_pct = pct_range[1] * adjustment
+        return (f"{low_pct:.1%} to {high_pct:.1%}", float((low_pct + high_pct) / 2))
+
+    price_ranges = leverage_frame.apply(estimate_price_reduction, axis=1)
+    leverage_frame["Potential Price Reduction"] = [item[0] for item in price_ranges]
+    leverage_frame["potential_reduction_midpoint"] = [item[1] for item in price_ranges]
+    leverage_frame["Potential Incremental Savings"] = (
+        leverage_frame["scenario_spend"] * leverage_frame["potential_reduction_midpoint"]
+    ).round(2)
+
+    def build_negotiation_action(row: pd.Series) -> str:
+        role = str(row.get("scenario_role", ""))
+        supplier = str(row.get("supplier", "This supplier"))
+        leverage_components = int(row.get("leverage_components", 0))
+        if role == "Removed":
+            return "No price negotiation is recommended; focus on transition, inventory, and exit controls."
+        if role == "Mitigation Supplier":
+            return "Keep this supplier qualified as backup coverage and focus negotiations on readiness, flexibility, and response terms rather than price."
+        if leverage_components > 0 and float(row.get("negotiation_leverage_score", 0.0)) >= 55:
+            return f"Use the larger award position with {supplier} to request a price reduction, then tie the concession to service and continuity commitments."
+        if float(row.get("negotiation_leverage_score", 0.0)) >= 40:
+            return f"Test a targeted cost-down discussion with {supplier} based on the revised award share, but keep service and risk safeguards in scope."
+        return f"Prioritize service-level, lead-time, and continuity commitments with {supplier}; direct price leverage is more limited in the current mix."
+
+    def build_leverage_reason(row: pd.Series) -> str:
+        role = str(row.get("scenario_role", ""))
+        if role != "Selected Supplier":
+            return "This supplier is not carrying the primary awarded volume in the scenario."
+        reasons: List[str] = []
+        if float(row.get("spend_gain", 0.0)) > 0:
+            reasons.append(f"scenario spend increases by {format_currency(float(row.get('spend_gain', 0.0)))}")
+        if float(row.get("share_gain", 0.0)) > 0:
+            reasons.append(f"portfolio share rises by {float(row.get('share_gain', 0.0)):.1%}")
+        if float(row.get("leverage_component_share", 0.0)) >= 0.25:
+            reasons.append(f"{float(row.get('leverage_component_share', 0.0)):.0%} of supported components are in Leverage positions")
+        if float(row.get("avg_component_supplier_count", 0.0)) > 1.5:
+            reasons.append("the supported component mix still has competitive alternatives")
+        if not reasons:
+            reasons.append("the scenario retains meaningful spend with this supplier, but the mix offers limited extra leverage")
+        return ", ".join(reasons) + "."
+
+    leverage_frame["Negotiation Action"] = leverage_frame.apply(build_negotiation_action, axis=1)
+    leverage_frame["Why This Supplier Has Leverage"] = leverage_frame.apply(build_leverage_reason, axis=1)
+
+    result = leverage_frame.rename(
+        columns={
+            "supplier": "Supplier",
+            "scenario_role": "Scenario Role",
+            "scenario_spend": "Scenario Spend",
+            "spend_gain": "Spend Change",
+            "share_gain": "Portfolio Share Change",
+            "negotiation_leverage_score": "Negotiation Leverage Score",
+        }
+    )[
+        columns
+    ].copy()
+
+    if "Scenario Role" in result.columns:
+        role_order = {"Selected Supplier": 1, "Mitigation Supplier": 2, "Removed": 3}
+        result["__role_order"] = result["Scenario Role"].map(lambda value: role_order.get(str(value), 9))
+        result = result.sort_values(
+            ["__role_order", "Negotiation Leverage Score", "Scenario Spend", "Supplier"],
+            ascending=[True, False, False, True],
+        ).drop(columns="__role_order")
+    return result.reset_index(drop=True)
+
+
+@st.cache_data(show_spinner=False)
 def make_download_bundle(data_map: Dict[str, pd.DataFrame]) -> bytes:
     output = io.StringIO()
     for name, frame in data_map.items():
@@ -3852,6 +4026,7 @@ def build_priority_actions_table(
     executive_actions: pd.DataFrame,
     scenario_applied: bool = False,
     action_supplier_summary: Optional[pd.DataFrame] = None,
+    negotiation_plan: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     source_supplier_summary = (
         action_supplier_summary.copy()
@@ -3920,6 +4095,26 @@ def build_priority_actions_table(
         priority_frame = priority_frame.drop(columns="Executive Savings")
     priority_frame["Recommended Action"] = priority_frame["Recommended Action"].fillna("Review the supplier position and convert the decision into an execution plan.")
     priority_frame["Key Issues"] = priority_frame["Key Issues"].fillna("No material issues captured.")
+    if scenario_applied and negotiation_plan is not None and not negotiation_plan.empty:
+        negotiation_lookup = negotiation_plan[
+            [col for col in ["Supplier", "Potential Price Reduction", "Negotiation Action"] if col in negotiation_plan.columns]
+        ].copy()
+        priority_frame = priority_frame.merge(negotiation_lookup, on="Supplier", how="left")
+        if "Negotiation Action" in priority_frame.columns:
+            priority_frame["Recommended Action"] = np.where(
+                priority_frame["Negotiation Action"].fillna("").ne("")
+                & priority_frame["Potential Price Reduction"].fillna("").ne("Not a primary negotiation target"),
+                priority_frame["Recommended Action"].fillna("").astype(str).str.rstrip(".")
+                + ". Negotiation move: "
+                + priority_frame["Negotiation Action"].fillna("").astype(str)
+                + " Estimated price-reduction potential: "
+                + priority_frame["Potential Price Reduction"].fillna("").astype(str)
+                + ".",
+                priority_frame["Recommended Action"],
+            )
+            priority_frame = priority_frame.drop(columns=["Negotiation Action"])
+        if "Potential Price Reduction" in priority_frame.columns:
+            priority_frame = priority_frame.drop(columns=["Potential Price Reduction"])
 
     if scenario_applied and not supplier_action_plan.empty and "Supplier" in supplier_action_plan.columns:
         scenario_order_lookup = {
@@ -4076,6 +4271,7 @@ def render_executive_dashboard(
     summary_text: str = "",
     scenario_applied: bool = False,
     action_supplier_summary: Optional[pd.DataFrame] = None,
+    negotiation_plan: Optional[pd.DataFrame] = None,
 ) -> None:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
@@ -4133,6 +4329,7 @@ def render_executive_dashboard(
         executive_actions,
         scenario_applied=scenario_applied,
         action_supplier_summary=action_supplier_summary,
+        negotiation_plan=negotiation_plan,
     )
     if priority_actions.empty:
         st.info("No supplier action recommendations are available for the current view.")
@@ -4861,6 +5058,8 @@ def render_app():
         st.session_state["applied_scenario"] = None
     applied_scenario_metrics = None
     applied_scenario_assumptions: List[str] = []
+    applied_plan_analytics: Optional[Dict[str, pd.DataFrame]] = None
+    applied_negotiation_plan = pd.DataFrame()
     if scenario_state:
         analytics, applied_scenario_metrics, _, applied_scenario_assumptions = build_applied_scenario_analytics(
             base_analytics,
@@ -4874,6 +5073,11 @@ def render_app():
         summary_text = build_applied_executive_summary(base_analytics, analytics, applied_scenario_metrics)
         applied_plan_analytics = build_applied_supplier_plan_analytics(base_analytics, analytics)
         _, executive_actions, supplier_action_plan = build_executive_summary(applied_plan_analytics, scenario_applied=True)
+        applied_negotiation_plan = build_post_scenario_negotiation_plan(
+            base_analytics,
+            analytics,
+            applied_plan_analytics["supplier_summary"],
+        )
     else:
         summary_text, executive_actions, supplier_action_plan = build_executive_summary(analytics, scenario_applied=False)
     _, _, base_supplier_action_plan = build_executive_summary(base_analytics, scenario_applied=False)
@@ -4937,6 +5141,7 @@ def render_app():
             summary_text=summary_text,
             scenario_applied=scenario_applied,
             action_supplier_summary=applied_plan_analytics["supplier_summary"] if scenario_applied else None,
+            negotiation_plan=applied_negotiation_plan if scenario_applied else None,
         )
 
     with tabs[1]:
@@ -5528,6 +5733,17 @@ def render_app():
         scenario_metrics, scenario_df, scenario_assumptions = build_consolidation_scenario(
             base_analytics, tuple(sorted(display_selected_suppliers)), tuple(sorted(display_mitigation_assignments))
         )
+        current_scenario_analytics, _, _, _ = build_applied_scenario_analytics(
+            base_analytics,
+            tuple(sorted(display_selected_suppliers)),
+            tuple(sorted(display_mitigation_assignments)),
+        )
+        current_plan_analytics = build_applied_supplier_plan_analytics(base_analytics, current_scenario_analytics)
+        scenario_negotiation_plan = build_post_scenario_negotiation_plan(
+            base_analytics,
+            current_scenario_analytics,
+            current_plan_analytics["supplier_summary"],
+        )
         current_scorecard = score_supplier_scenario(
             base_analytics,
             tuple(sorted(display_selected_suppliers)),
@@ -5663,6 +5879,47 @@ def render_app():
             breakdown = current_scorecard.get("breakdown", pd.DataFrame())
             if isinstance(breakdown, pd.DataFrame) and not breakdown.empty:
                 show_table(breakdown)
+        st.subheader("Post-Scenario Negotiation Potential")
+        if scenario_negotiation_plan.empty:
+            st.info("Evaluate a scenario with at least one retained supplier to estimate where the remaining award structure creates negotiation leverage.")
+        else:
+            negotiation_targets = scenario_negotiation_plan.loc[
+                scenario_negotiation_plan["Scenario Role"].eq("Selected Supplier")
+                & scenario_negotiation_plan["Potential Price Reduction"].ne("Not a primary negotiation target")
+            ].head(3)
+            if not negotiation_targets.empty:
+                target_names = negotiation_targets["Supplier"].astype(str).tolist()
+                render_narrative_text(
+                    "This view estimates where the scenario creates post-award bargaining power by combining spend gain, portfolio-share gain, competitive depth, Leverage-category mix, and supplier risk. "
+                    + "The strongest current negotiation candidates are "
+                    + format_name_list(target_names, max_items=3)
+                    + ", where the revised award mix creates the best opportunity to ask for price concessions without ignoring service and continuity terms."
+                )
+            else:
+                render_narrative_text(
+                    "This view estimates where the scenario creates post-award bargaining power by combining spend gain, portfolio-share gain, competitive depth, Leverage-category mix, and supplier risk. "
+                    + "The current scenario leaves limited direct price leverage, so the follow-up should focus more on continuity, lead-time, and service commitments than on aggressive cost-down targets."
+                )
+            st.caption(
+                "Use this section to test whether giving fewer suppliers more business creates a stronger case for price reductions, service-level commitments, or lead-time improvements."
+            )
+            st.dataframe(
+                scenario_negotiation_plan,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Supplier": st.column_config.TextColumn("Supplier", width="medium"),
+                    "Scenario Role": st.column_config.TextColumn("Scenario Role", width="small"),
+                    "Scenario Spend": st.column_config.NumberColumn("Scenario Spend", format="$%d", width="small"),
+                    "Spend Change": st.column_config.NumberColumn("Spend Change", format="$%d", width="small"),
+                    "Portfolio Share Change": st.column_config.NumberColumn("Portfolio Share Change", format="%.1f%%", width="small"),
+                    "Negotiation Leverage Score": st.column_config.NumberColumn("Negotiation Leverage Score", format="%.1f", width="small"),
+                    "Potential Price Reduction": st.column_config.TextColumn("Potential Price Reduction", width="small"),
+                    "Potential Incremental Savings": st.column_config.NumberColumn("Potential Incremental Savings", format="$%d", width="small"),
+                    "Negotiation Action": st.column_config.TextColumn("Negotiation Action", width="large"),
+                    "Why This Supplier Has Leverage": st.column_config.TextColumn("Why This Supplier Has Leverage", width="large"),
+                },
+            )
 
         current_snapshot = build_scenario_compare_snapshot(
             "Current scenario",
