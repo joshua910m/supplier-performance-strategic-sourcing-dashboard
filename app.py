@@ -560,26 +560,26 @@ def build_sample_data() -> pd.DataFrame:
 def build_sample_sql_seed_frame() -> pd.DataFrame:
     return pd.DataFrame(
         [
-            ["Alpha Metals", "Bearing Assembly", 160000, 2000, 80, 18, 21, 62, 88],
-            ["Beta Industrial", "Bearing Assembly", 90000, 1100, 82, 10, 18, 45, 88],
-            ["Alpha Metals", "Housing Unit", 120000, 1500, 80, 9, 26, 58, 78],
-            ["Delta Components", "Housing Unit", 60000, 800, 75, 22, 34, 71, 78],
-            ["Nova Circuits", "Controller Board", 230000, 900, 255, 32, 42, 84, 95],
-            ["Prime Source", "Controller Board", 40000, 150, 267, 7, 37, 64, 95],
-            ["Omega Plastics", "Seal Kit", 50000, 5000, 10, 14, 10, 32, 52],
-            ["Vertex Supply", "Seal Kit", 35000, 3300, 11, 8, 12, 28, 52],
-            ["Vertex Supply", "Fastener Pack", 42000, 12000, 3.5, 30, 8, 25, 40],
-            ["Sigma Parts", "Fastener Pack", 28000, 9000, 3.1, 18, 11, 38, 40],
-            ["Nova Circuits", "Sensor Module", 145000, 500, 290, 21, 45, 87, 91],
-            ["Core Micro", "Sensor Module", 60000, 220, 273, 12, 39, 74, 91],
-            ["Gamma Forging", "Valve Body", 98000, 950, 103, 11, 29, 55, 73],
-            ["Titan Works", "Valve Body", 66000, 620, 106, 15, 31, 68, 73],
-            ["Solo Precision", "Custom Bracket", 76000, 400, 190, 16, 47, 82, 86],
-            ["Alpha Metals", "Rotor Shaft", 110000, 700, 157, 6, 24, 51, 84],
-            ["Titan Works", "Rotor Shaft", 45000, 300, 150, 9, 27, 66, 84],
-            ["Prime Source", "Power Relay", 72000, 1200, 60, 11, 20, 53, 65],
-            ["Electra Hub", "Power Relay", 68000, 1050, 64.8, 5, 16, 41, 65],
-            ["Solo Precision", "Safety Latch", 54000, 240, 225, 9, 51, 79, 93],
+            ["Atlas Industrial", "Hydraulic Pump", 245000, 1400, 175, 28, 46, 78, 96],
+            ["Summit Fluidics", "Hydraulic Pump", 118000, 760, 155, 9, 24, 49, 96],
+            ["Northwind Controls", "Valve Controller", 188000, 640, 294, 23, 39, 82, 91],
+            ["Core Axis", "Valve Controller", 92000, 360, 256, 8, 21, 57, 91],
+            ["BluePeak Plastics", "Seal Cartridge", 83000, 4200, 19.8, 31, 18, 43, 61],
+            ["Meridian Polymers", "Seal Cartridge", 41000, 2500, 16.4, 11, 13, 34, 61],
+            ["ForgeLine Metals", "Drive Shaft", 172000, 860, 200, 19, 33, 68, 87],
+            ["TorqueWorks", "Drive Shaft", 76000, 390, 194.9, 7, 19, 46, 87],
+            ["SignalGrid", "Sensor Array", 214000, 520, 411.5, 35, 48, 89, 99],
+            ["OptiCircuit", "Sensor Array", 97000, 250, 388, 12, 29, 65, 99],
+            ["Harbor Fasteners", "Fastener Kit", 36000, 15000, 2.4, 44, 9, 22, 38],
+            ["Pioneer Hardware", "Fastener Kit", 24000, 9700, 2.47, 16, 8, 18, 38],
+            ["Everstream Power", "Relay Module", 126000, 1850, 68.1, 14, 17, 47, 69],
+            ["Dynatek Systems", "Relay Module", 59000, 760, 77.6, 10, 16, 59, 69],
+            ["Cobalt Precision", "Bracket Assembly", 91000, 430, 211.6, 18, 44, 76, 88],
+            ["Praxis Fabrication", "Bracket Assembly", 47000, 250, 188, 9, 26, 54, 88],
+            ["Luma Electronics", "Power Board", 205000, 710, 288.7, 26, 41, 84, 94],
+            ["NovaSwitch", "Power Board", 88000, 330, 266.7, 11, 25, 63, 94],
+            ["Crest Shielding", "Safety Housing", 73000, 610, 119.7, 6, 22, 39, 74],
+            ["Vector Cast", "Safety Housing", 51000, 450, 113.3, 5, 20, 42, 74],
         ],
         columns=["supplier", "component", "spend", "units", "unit_cost", "defects", "lead_time", "risk_score", "criticality"],
     )
@@ -5492,15 +5492,19 @@ def render_app():
                 options=list(SQL_EXAMPLE_QUERIES.keys()),
                 key="selected_sql_example",
             )
-            if st.session_state.get("last_selected_sql_example") != selected_example:
-                st.session_state["sql_query_text"] = SQL_EXAMPLE_QUERIES[selected_example]
+            reset_example_query = st.button("Reset Query To Selected Example", use_container_width=True)
+            current_query_text = str(st.session_state.get("sql_query_text", ""))
+            if reset_example_query or st.session_state.get("last_selected_sql_example") != selected_example or not current_query_text.strip():
+                current_query_text = SQL_EXAMPLE_QUERIES[selected_example]
+                st.session_state["sql_query_text"] = current_query_text
                 st.session_state["last_selected_sql_example"] = selected_example
-            st.text_area(
+            current_query_text = st.text_area(
                 "SQL query",
-                key="sql_query_text",
+                value=current_query_text,
                 height=180,
                 help="Use a read-only SELECT or WITH query against your configured SQL connection.",
             )
+            st.session_state["sql_query_text"] = current_query_text
             st.caption("Example schemas: procurement_data, supplier_performance_summary, component_risk_summary.")
             if st.button("Test SQL Connection", use_container_width=True):
                 try:
@@ -5515,6 +5519,7 @@ def render_app():
             if st.button("Load SQL Data", type="primary", use_container_width=True):
                 try:
                     validated_query = validate_sql_query(st.session_state.get("sql_query_text", ""))
+                    st.session_state["sql_query_text"] = validated_query
                     st.session_state["active_sql_query"] = validated_query
                     st.session_state["sql_mode_message"] = ("success", "SQL query loaded for analysis.")
                 except ValueError as exc:
