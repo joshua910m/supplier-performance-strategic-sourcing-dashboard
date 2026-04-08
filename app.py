@@ -4219,6 +4219,11 @@ def build_post_scenario_negotiation_chart(negotiation_plan: pd.DataFrame) -> alt
     chart_data["Negotiation Leverage Score"] = pd.to_numeric(
         chart_data["Negotiation Leverage Score"], errors="coerce"
     ).fillna(0.0)
+    chart_data["Base Share Label"] = chart_data["Base Portfolio Share"].map(lambda value: f"{float(value):.1f}%")
+    chart_data["Scenario Share Label"] = chart_data["Scenario Portfolio Share"].map(lambda value: f"{float(value):.1f}%")
+    chart_data["Share Change Label"] = chart_data["Portfolio Share Change"].map(
+        lambda value: f"{float(value):+.1f} pts"
+    )
     chart_data = chart_data.sort_values(
         ["Potential Incremental Savings", "Negotiation Leverage Score"], ascending=[False, False]
     ).head(8)
@@ -4237,9 +4242,9 @@ def build_post_scenario_negotiation_chart(negotiation_plan: pd.DataFrame) -> alt
             tooltip=[
                 alt.Tooltip("Supplier:N", title="Supplier"),
                 alt.Tooltip("Scenario Spend:Q", title="Scenario Spend", format="$,.0f"),
-                alt.Tooltip("Base Portfolio Share:Q", title="Base Share", format=".1f"),
-                alt.Tooltip("Scenario Portfolio Share:Q", title="Scenario Share", format=".1f"),
-                alt.Tooltip("Portfolio Share Change:Q", title="Share Change (pts)", format=".1f"),
+                alt.Tooltip("Base Share Label:N", title="Base Share"),
+                alt.Tooltip("Scenario Share Label:N", title="Scenario Share"),
+                alt.Tooltip("Share Change Label:N", title="Share Change"),
                 alt.Tooltip("Negotiation Leverage Score:Q", title="Negotiation Leverage Score", format=".1f"),
                 alt.Tooltip("Potential Price Reduction:N", title="Potential Price Reduction"),
                 alt.Tooltip("Potential Incremental Savings:Q", title="Potential Incremental Savings", format="$,.0f"),
