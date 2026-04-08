@@ -2,7 +2,7 @@
 
 ## Overview
 
-Supplier Performance & Strategic Sourcing Dashboard is a Streamlit application built to turn messy procurement data into decision-ready supplier, risk, and sourcing insights. It is designed for procurement analysts, sourcing teams, and supply chain leaders who need to move quickly from raw Excel or CSV files to supplier actions, scenario comparisons, and executive-ready recommendations.
+Supplier Performance & Strategic Sourcing Dashboard is a Streamlit application built to turn messy procurement data into decision-ready supplier, risk, and sourcing insights. It is designed for procurement analysts, sourcing teams, and supply chain leaders who need to move quickly from raw Excel, CSV, or SQL-backed procurement datasets to supplier actions, scenario comparisons, and executive-ready recommendations.
 
 ## Business Problem
 
@@ -12,11 +12,12 @@ That creates a gap between analysis and action. Leaders may know there is exposu
 
 ## Solution
 
-This application ingests messy Excel and CSV procurement files, normalizes the fields into a common structure, and converts them into supplier performance insights, sourcing risk views, scenario-based decision support, and action-oriented supplier recommendations. Instead of stopping at reporting, it combines analytics with business logic to highlight what should be retained, monitored, mitigated, consolidated, or exited.
+This application ingests messy Excel and CSV procurement files or read-only SQL query results, normalizes the fields into a common structure, and converts them into supplier performance insights, sourcing risk views, scenario-based decision support, and action-oriented supplier recommendations. Instead of stopping at reporting, it combines analytics with business logic to highlight what should be retained, monitored, mitigated, consolidated, or exited.
 
 ## Key Features
 
 - Automated data normalization for inconsistent procurement inputs
+- First-class data ingestion from uploaded CSV/Excel files or read-only SQL queries
 - KPI dashboard for supplier footprint, spend, lead time, defects, and single-source exposure
 - Executive summary built from current supplier, component, and scenario analytics
 - Supplier Risk vs Performance visualization for quality, lead-time, and spend exposure
@@ -37,11 +38,22 @@ This application ingests messy Excel and CSV procurement files, normalizes the f
 
 ## How It Works
 
-1. Upload procurement data from Excel or CSV.
+1. Load procurement data from Excel, CSV, or a read-only SQL query.
 2. Normalize messy or inconsistent fields into a common data model.
 3. Compute supplier, component, concentration, and risk analytics.
 4. Classify supplier actions and highlight sourcing priorities.
 5. Explore scenario alternatives, review negotiation leverage, and evaluate decision-ready outputs.
+
+## SQL Database Configuration
+
+SQL mode uses Streamlit native SQL connections. Store credentials in `.streamlit/secrets.toml`:
+
+```toml
+[connections.sql]
+url = "postgresql+psycopg2://username:password@host:5432/database"
+```
+
+SQLAlchemy-compatible connection URLs are supported through Streamlit's SQL connection config. In this v1 implementation, SQL mode accepts read-only `SELECT` and `WITH` queries only.
 
 ## Example Use Cases
 
