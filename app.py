@@ -4547,6 +4547,7 @@ def render_executive_dashboard(
         st.markdown('<div class="executive-section-title">Base Case Reference</div>', unsafe_allow_html=True)
         render_kpi_cards(base_analytics["component_summary"], base_analytics["supplier_summary"])
     else:
+        render_kpi_cards(component_summary, supplier_summary)
         render_minor_spacing()
     st.markdown('<div class="executive-section-title">Executive Summary</div>', unsafe_allow_html=True)
     executive_summary = build_executive_dashboard_summary(
