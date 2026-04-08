@@ -5695,7 +5695,7 @@ def render_app():
             f"{applied_scenario_metrics['covered_spend_share']:.0%} covered spend, "
             f"and {applied_high_risk_count} high-risk components."
         )
-        if st.button("Revert To Base Dashboard", type="secondary"):
+        if st.button("Revert To Original Data", type="secondary"):
             st.session_state["applied_scenario"] = None
             save_persisted_scenario_state(
                 {
