@@ -13,7 +13,6 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 
 st.set_page_config(
@@ -331,8 +330,22 @@ RISK_LEVEL_DOMAIN = ["High", "Medium", "Low"]
 RISK_LEVEL_RANGE = ["#d73027", "#f39c12", "#2e8b57"]
 ABC_CLASS_DOMAIN = ["A", "B", "C"]
 ABC_CLASS_RANGE = ["#1f4e79", "#7a5c99", "#8a6f42"]
-DECISION_DOMAIN = ["Eliminate / De-prioritize", "Keep and Monitor", "Keep / Consolidate To"]
-DECISION_RANGE = ["#d73027", "#f39c12", "#2e8b57"]
+DECISION_DOMAIN = [
+    "Eliminate / De-prioritize",
+    "Keep / Consolidate To",
+    "Keep and Monitor",
+    "Risk Accepted",
+    "Keep (Constraint Applied)",
+]
+DECISION_RANGE = ["#d73027", "#2e8b57", "#f39c12", "#7c3aed", "#1f4e79"]
+SCENARIO_OBJECTIVE_OPTIONS = [
+    "Balanced",
+    "Risk Reduction",
+    "Net Savings",
+    "Spend Leverage",
+    "Total Spend",
+    "Constraint-Aware Review",
+]
 SQL_EXAMPLE_QUERIES = {
     "Procurement Data (sample)": "SELECT * FROM procurement_data LIMIT 1000",
     "Supplier Performance Summary": "SELECT * FROM supplier_performance_summary",
@@ -366,6 +379,17 @@ COLUMN_ALIASES = {
     "receipt_date": ["receipt_date", "delivery_date", "received_date", "arrival_date", "ship_date", "fulfilled_date"],
     "risk_score": ["risk_score", "supplier_risk", "risk", "external_risk", "risk_rating"],
     "criticality": ["criticality", "criticality_score", "business_criticality", "importance", "priority"],
+    "supplier_protected": ["supplier_protected", "protected_supplier", "strategic_supplier", "must_keep_supplier"],
+    "contract_locked": ["contract_locked", "locked_contract", "contract_constraint", "contractual_lock"],
+    "do_not_eliminate": ["do_not_eliminate", "no_exit", "keep_supplier", "must_retain_supplier"],
+    "risk_accepted": ["risk_accepted", "accepted_risk", "tolerate_risk"],
+    "component_single_source_required": [
+        "component_single_source_required",
+        "required_single_source",
+        "unavoidable_single_source",
+    ],
+    "engineering_locked": ["engineering_locked", "design_locked", "engineering_constraint"],
+    "regulatory_locked": ["regulatory_locked", "compliance_locked", "regulated_source"],
 }
 
 CANONICAL_COLUMNS = [
@@ -381,7 +405,151 @@ CANONICAL_COLUMNS = [
     "receipt_date",
     "risk_score",
     "criticality",
+    "supplier_protected",
+    "contract_locked",
+    "do_not_eliminate",
+    "risk_accepted",
+    "component_single_source_required",
+    "engineering_locked",
+    "regulatory_locked",
 ]
+
+BOOLEAN_FALSEY = {"", "0", "false", "f", "no", "n", "off"}
+BOOLEAN_TRUTHY = {"1", "true", "t", "yes", "y", "on"}
+POLICY_FLAG_COLUMNS = [
+    "supplier_protected",
+    "contract_locked",
+    "do_not_eliminate",
+    "risk_accepted",
+    "component_single_source_required",
+    "engineering_locked",
+    "regulatory_locked",
+]
+POLICY_FLAG_LABELS = {
+    "supplier_protected": "Protected Supplier",
+    "contract_locked": "Contract Locked",
+    "do_not_eliminate": "Do Not Eliminate",
+    "risk_accepted": "Risk Accepted",
+    "component_single_source_required": "Single-Source Required",
+    "engineering_locked": "Engineering Locked",
+    "regulatory_locked": "Regulatory Locked",
+}
+
+
+def normalize_boolean_series(series: pd.Series) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype=bool)
+    if pd.api.types.is_bool_dtype(series):
+        return series.fillna(False).astype(bool)
+    normalized = series.astype(str).str.strip().str.lower()
+    bool_values = np.where(normalized.isin(BOOLEAN_TRUTHY), True, np.where(normalized.isin(BOOLEAN_FALSEY), False, False))
+    return pd.Series(bool_values, index=series.index).fillna(False).astype(bool)
+
+
+def _clamp_scenario_spend_value(value: float, max_value: Optional[float] = None) -> float:
+    numeric_value = max(float(value), 0.0)
+    if max_value is not None:
+        numeric_value = min(numeric_value, max(float(max_value), 0.0))
+    return numeric_value
+
+
+def sync_scenario_spend_control_from_slider(control_key: str, max_value: Optional[float] = None) -> None:
+    slider_key = f"{control_key}__slider"
+    input_key = f"{control_key}__input"
+    control_value = _clamp_scenario_spend_value(st.session_state.get(slider_key, 0.0), max_value=max_value)
+    st.session_state[control_key] = control_value
+    st.session_state[input_key] = control_value
+
+
+def sync_scenario_spend_control_from_input(control_key: str, max_value: Optional[float] = None) -> None:
+    slider_key = f"{control_key}__slider"
+    input_key = f"{control_key}__input"
+    control_value = _clamp_scenario_spend_value(st.session_state.get(input_key, 0.0), max_value=max_value)
+    st.session_state[control_key] = control_value
+    st.session_state[slider_key] = control_value
+    st.session_state[input_key] = control_value
+
+
+def apply_policy_overrides(
+    normalized_df: pd.DataFrame,
+    override_frame: Optional[pd.DataFrame],
+) -> pd.DataFrame:
+    if override_frame is None or override_frame.empty or normalized_df.empty:
+        return normalized_df
+    merge_keys = ["supplier", "component"]
+    override_columns = [*merge_keys, *POLICY_FLAG_COLUMNS]
+    available_override_columns = [col for col in override_columns if col in override_frame.columns]
+    if any(key not in available_override_columns for key in merge_keys):
+        return normalized_df
+    merged = normalized_df.merge(
+        override_frame[available_override_columns].rename(columns={col: f"{col}__override" for col in POLICY_FLAG_COLUMNS if col in available_override_columns}),
+        on=merge_keys,
+        how="left",
+    )
+    for col in POLICY_FLAG_COLUMNS:
+        override_col = f"{col}__override"
+        if override_col in merged.columns:
+            merged[col] = normalize_boolean_series(merged[override_col]).where(merged[override_col].notna(), merged[col])
+            merged = merged.drop(columns=[override_col])
+        merged[col] = normalize_boolean_series(merged[col]).fillna(False).astype(bool)
+    return merged
+
+
+def build_policy_override_editor_frame(normalized_df: pd.DataFrame) -> pd.DataFrame:
+    if normalized_df.empty:
+        return pd.DataFrame(columns=["override_scope_id", "supplier", "component", *POLICY_FLAG_COLUMNS])
+    editor_columns = ["supplier", "component", *POLICY_FLAG_COLUMNS]
+    editor_frame = normalized_df[editor_columns].copy()
+    for col in POLICY_FLAG_COLUMNS:
+        editor_frame[col] = normalize_boolean_series(editor_frame[col]).fillna(False).astype(bool)
+    editor_frame = (
+        editor_frame.groupby(["supplier", "component"], as_index=False)[POLICY_FLAG_COLUMNS]
+        .max()
+        .sort_values(["supplier", "component"], kind="stable")
+        .reset_index(drop=True)
+    )
+    editor_frame["override_scope_id"] = np.arange(1, len(editor_frame) + 1)
+    editor_frame = editor_frame[["override_scope_id", "supplier", "component", *POLICY_FLAG_COLUMNS]]
+    return editor_frame
+
+
+def hydrate_policy_override_editor_frame(
+    normalized_df: pd.DataFrame,
+    override_frame: Optional[pd.DataFrame],
+) -> pd.DataFrame:
+    editor_frame = build_policy_override_editor_frame(normalized_df)
+    if override_frame is None or override_frame.empty or editor_frame.empty:
+        return editor_frame
+    merge_keys = ["supplier", "component"]
+    if any(key not in override_frame.columns for key in merge_keys):
+        return editor_frame
+    hydrated = editor_frame.merge(
+        override_frame[[*merge_keys, *[col for col in POLICY_FLAG_COLUMNS if col in override_frame.columns]]],
+        on=merge_keys,
+        how="left",
+        suffixes=("", "__saved"),
+    )
+    for col in POLICY_FLAG_COLUMNS:
+        saved_col = f"{col}__saved"
+        if saved_col in hydrated.columns:
+            hydrated[col] = normalize_boolean_series(hydrated[saved_col]).where(hydrated[saved_col].notna(), hydrated[col])
+            hydrated = hydrated.drop(columns=[saved_col])
+        hydrated[col] = normalize_boolean_series(hydrated[col]).fillna(False).astype(bool)
+    return hydrated
+
+
+def save_policy_override_frame(source_key: str, override_frame: pd.DataFrame) -> None:
+    if override_frame is None or override_frame.empty:
+        return
+    updated_frame = override_frame.copy()
+    for col in POLICY_FLAG_COLUMNS:
+        if col in updated_frame.columns:
+            updated_frame[col] = normalize_boolean_series(updated_frame[col]).fillna(False).astype(bool)
+    override_store = st.session_state.get("policy_overrides_by_source", {})
+    if not isinstance(override_store, dict):
+        override_store = {}
+    override_store[source_key] = updated_frame[["supplier", "component", *POLICY_FLAG_COLUMNS]].reset_index(drop=True)
+    st.session_state["policy_overrides_by_source"] = override_store
 
 
 def cleanup_excel_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -460,6 +628,18 @@ def normalize_input_data(df: pd.DataFrame) -> pd.DataFrame:
     for col in numeric_cols:
         normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
 
+    boolean_cols = [
+        "supplier_protected",
+        "contract_locked",
+        "do_not_eliminate",
+        "risk_accepted",
+        "component_single_source_required",
+        "engineering_locked",
+        "regulatory_locked",
+    ]
+    for col in boolean_cols:
+        normalized[col] = normalize_boolean_series(normalized[col]).fillna(False).astype(bool)
+
     normalized["order_date"] = pd.to_datetime(normalized["order_date"], errors="coerce")
     normalized["receipt_date"] = pd.to_datetime(normalized["receipt_date"], errors="coerce")
 
@@ -526,6 +706,13 @@ def build_input_field_status(df: pd.DataFrame) -> pd.DataFrame:
         "lead_time": "Used directly when present; otherwise derived from receipt date minus order date where possible.",
         "risk_score": "Used as an input to the modeled risk score; defaults to 50 when not provided or unusable.",
         "criticality": "Used as an input to strategic priority; defaults to 50 when not provided or unusable.",
+        "supplier_protected": "Optional policy flag. Missing values default to False.",
+        "contract_locked": "Optional policy flag. Missing values default to False.",
+        "do_not_eliminate": "Optional policy flag. Missing values default to False.",
+        "risk_accepted": "Optional policy flag. Missing values default to False.",
+        "component_single_source_required": "Optional component constraint flag. Missing values default to False.",
+        "engineering_locked": "Optional component constraint flag. Missing values default to False.",
+        "regulatory_locked": "Optional component constraint flag. Missing values default to False.",
     }
     numeric_fields = {"spend", "units", "defects", "lead_time", "risk_score", "criticality"}
     rows: List[Dict[str, str]] = []
@@ -818,10 +1005,157 @@ def scale_if_variable(series: pd.Series, invert: bool = False, default_value: fl
     return min_max_scale(numeric, invert=invert)
 
 
+def normalize_scenario_objective_name(objective: str) -> str:
+    objective_map = {
+        "Best Overall": "Balanced",
+        "Best Net Savings": "Net Savings",
+        "Best Risk Reduction": "Risk Reduction",
+    }
+    normalized = objective_map.get(str(objective), str(objective))
+    return normalized if normalized in SCENARIO_OBJECTIVE_OPTIONS else "Balanced"
+
+
+def get_decision_rank(decision: str) -> int:
+    return {name: idx + 1 for idx, name in enumerate(DECISION_DOMAIN)}.get(str(decision), len(DECISION_DOMAIN) + 1)
+
+
+def build_spend_importance_score(total_spend: pd.Series, spend_share: pd.Series) -> pd.Series:
+    scaled_total_spend = scale_if_variable(total_spend)
+    scaled_spend_share = scale_if_variable(spend_share)
+    return (0.7 * scaled_total_spend + 0.3 * scaled_spend_share).round(2)
+
+
+def build_strategic_fit_score(
+    preferred_component_count: pd.Series,
+    spend_importance_score: pd.Series,
+    performance_score: pd.Series,
+    supports_critical_coverage: pd.Series,
+    replaceability_score: pd.Series,
+    protected_flag: pd.Series,
+) -> pd.Series:
+    preferred_numeric = pd.to_numeric(preferred_component_count, errors="coerce").fillna(0.0)
+    spend_numeric = pd.to_numeric(spend_importance_score, errors="coerce").fillna(50.0)
+    performance_numeric = pd.to_numeric(performance_score, errors="coerce").fillna(50.0)
+    replaceability_numeric = pd.to_numeric(replaceability_score, errors="coerce").fillna(50.0)
+    protected_numeric = normalize_boolean_series(protected_flag).astype(bool)
+    coverage_numeric = normalize_boolean_series(supports_critical_coverage).astype(bool)
+
+    score = pd.Series(np.full(len(preferred_numeric), 50.0), index=preferred_numeric.index)
+    score += np.where(preferred_numeric >= 2, 20.0, 0.0)
+    score += np.where((spend_numeric >= 65.0) & (performance_numeric >= 55.0), 15.0, 0.0)
+    score += np.where(coverage_numeric, 10.0, 0.0)
+    score -= np.where((spend_numeric <= 35.0) & (performance_numeric <= 45.0), 15.0, 0.0)
+    score -= np.where((replaceability_numeric >= 65.0) & (~protected_numeric), 15.0, 0.0)
+    return score.clip(0, 100).round(2)
+
+
+def build_supplier_configuration_score(
+    supplier_frame: pd.DataFrame,
+    objective: str = "Balanced",
+) -> pd.Series:
+    normalized_objective = normalize_scenario_objective_name(objective)
+    weights = {
+        "Balanced": {
+            "spend_importance_score": 0.30,
+            "performance_score": 0.25,
+            "inverse_risk_score": 0.20,
+            "replaceability_score": 0.15,
+            "strategic_fit_score": 0.10,
+        },
+        "Risk Reduction": {
+            "spend_importance_score": 0.20,
+            "performance_score": 0.20,
+            "inverse_risk_score": 0.35,
+            "replaceability_score": 0.15,
+            "strategic_fit_score": 0.10,
+        },
+        "Net Savings": {
+            "spend_importance_score": 0.35,
+            "performance_score": 0.15,
+            "inverse_risk_score": 0.10,
+            "replaceability_score": 0.30,
+            "strategic_fit_score": 0.10,
+        },
+        "Spend Leverage": {
+            "spend_importance_score": 0.45,
+            "performance_score": 0.20,
+            "inverse_risk_score": 0.10,
+            "replaceability_score": 0.15,
+            "strategic_fit_score": 0.10,
+        },
+        "Total Spend": {
+            "spend_importance_score": 0.45,
+            "performance_score": 0.15,
+            "inverse_risk_score": 0.10,
+            "replaceability_score": 0.15,
+            "strategic_fit_score": 0.15,
+        },
+        "Constraint-Aware Review": {
+            "spend_importance_score": 0.30,
+            "performance_score": 0.25,
+            "inverse_risk_score": 0.20,
+            "replaceability_score": 0.15,
+            "strategic_fit_score": 0.10,
+        },
+    }
+    objective_weights = weights[normalized_objective]
+    score = pd.Series(np.zeros(len(supplier_frame)), index=supplier_frame.index, dtype=float)
+    for col, weight in objective_weights.items():
+        score += weight * pd.to_numeric(supplier_frame.get(col, 0.0), errors="coerce").fillna(0.0)
+    return score.round(2)
+
+
+def classify_supplier_decision(
+    row: Dict[str, object],
+    respect_constraints: bool = True,
+    include_accepted_risk: bool = True,
+) -> Tuple[str, str, str]:
+    supplier_constraint = bool(row.get("supplier_protected", False)) or bool(row.get("contract_locked", False)) or bool(row.get("do_not_eliminate", False))
+    component_constraint = bool(row.get("component_single_source_required", False)) or bool(row.get("engineering_locked", False)) or bool(row.get("regulatory_locked", False))
+    supports_constraint = bool(row.get("supports_single_source", False)) or bool(row.get("supports_high_risk", False))
+    configuration_score = float(row.get("supplier_configuration_score", 0.0))
+    spend_importance_score = float(row.get("spend_importance_score", 0.0))
+
+    if respect_constraints and (supplier_constraint or (component_constraint and supports_constraint) or bool(row.get("contract_locked", False))):
+        return (
+            "Keep (Constraint Applied)",
+            "Supplier is protected by contract, policy, or component-level sourcing constraints and should remain in the portfolio even if optimization alone would suggest a different move.",
+            "constraint override",
+        )
+    if include_accepted_risk and bool(row.get("risk_accepted", False)):
+        return (
+            "Risk Accepted",
+            "This supplier remains active because the business has explicitly accepted the risk exposure for the current sourcing context.",
+            "accepted risk",
+        )
+
+    provisional_decision = "Eliminate / De-prioritize"
+    if configuration_score >= 70:
+        provisional_decision = "Keep / Consolidate To"
+    elif configuration_score >= 45:
+        provisional_decision = "Keep and Monitor"
+    if spend_importance_score >= 75 and provisional_decision == "Eliminate / De-prioritize":
+        provisional_decision = "Keep and Monitor"
+
+    if provisional_decision == "Keep / Consolidate To":
+        reason = "High configuration score supported by spend importance, usable performance, and strategic fit across the current component mix."
+        policy_basis = "consolidation opportunity"
+    elif provisional_decision == "Keep and Monitor":
+        reason = "Supplier remains viable, but risk, replaceability, or performance still warrants a monitored rather than expansion-led posture."
+        policy_basis = "watchlist"
+    else:
+        reason = "Supplier is comparatively replaceable and lower-fit for the current sourcing structure once spend, performance, and policy factors are weighed together."
+        policy_basis = "exit candidate"
+    return provisional_decision, reason, policy_basis
+
+
 def classify_suppliers(
     component_supplier_detail: pd.DataFrame,
     component_summary: pd.DataFrame,
     supplier_summary: pd.DataFrame,
+    optimization_objective: str = "Balanced",
+    respect_constraints: bool = True,
+    include_accepted_risk: bool = True,
 ) -> pd.DataFrame:
     ranking = component_supplier_detail.copy()
     ranking["rank_metric"] = (
@@ -840,61 +1174,55 @@ def classify_suppliers(
     supplier_decision_frame["preferred_component_count"] = supplier_decision_frame["preferred_component_count"].fillna(0)
 
     preferred_suppliers = set(primary_component_winners["supplier"].tolist())
-    protected_suppliers = set(
-        supplier_decision_frame.loc[
-            supplier_decision_frame["supports_single_source"] | supplier_decision_frame["supports_high_risk"],
-            "supplier",
-        ].tolist()
+    supplier_decision_frame["preferred_component_count"] = supplier_decision_frame["preferred_component_count"].fillna(0)
+    supplier_decision_frame["spend_importance_score"] = build_spend_importance_score(
+        supplier_decision_frame["spend"],
+        supplier_decision_frame["portfolio_share"],
+    )
+    supplier_decision_frame["inverse_risk_score"] = (100.0 - scale_if_variable(supplier_decision_frame["supplier_risk_score"])).clip(0, 100).round(2)
+    supplier_decision_frame["protected_flag"] = (
+        supplier_decision_frame["supplier_protected"]
+        | supplier_decision_frame["contract_locked"]
+        | supplier_decision_frame["do_not_eliminate"]
+    )
+    supplier_decision_frame["supports_constraint_coverage"] = (
+        supplier_decision_frame["supports_single_source"]
+        | supplier_decision_frame["supports_high_risk"]
+        | supplier_decision_frame["component_single_source_required"]
+        | supplier_decision_frame["engineering_locked"]
+        | supplier_decision_frame["regulatory_locked"]
+    )
+    supplier_decision_frame["strategic_fit_score"] = build_strategic_fit_score(
+        supplier_decision_frame["preferred_component_count"],
+        supplier_decision_frame["spend_importance_score"],
+        supplier_decision_frame["performance_score"],
+        supplier_decision_frame["supports_constraint_coverage"],
+        supplier_decision_frame["replaceability_score"],
+        supplier_decision_frame["protected_flag"],
+    )
+    supplier_decision_frame["supplier_configuration_score"] = build_supplier_configuration_score(
+        supplier_decision_frame,
+        optimization_objective,
     )
 
-    high_spend_cutoff = supplier_decision_frame["spend"].quantile(0.65) if len(supplier_decision_frame) else 0
-    strong_perf_cutoff = supplier_decision_frame["performance_score"].quantile(0.55) if len(supplier_decision_frame) else 0
-    weak_perf_cutoff = supplier_decision_frame["performance_score"].quantile(0.30) if len(supplier_decision_frame) else 0
-    replaceable_cutoff = supplier_decision_frame["replaceability_score"].quantile(0.60) if len(supplier_decision_frame) else 0
-    supplier_risk_cutoff = supplier_decision_frame["supplier_risk_score"].median() if len(supplier_decision_frame) else 0
-
     decisions: List[Dict[str, object]] = []
+    defect_median = float(supplier_decision_frame["defect_rate"].median()) if len(supplier_decision_frame) else 0.0
+    lead_time_median = float(supplier_decision_frame["avg_lead_time"].median()) if len(supplier_decision_frame) else 0.0
+    risk_median = float(supplier_decision_frame["avg_risk_score"].median()) if len(supplier_decision_frame) else 0.0
     for row in supplier_decision_frame.to_dict(orient="records"):
         supplier_name = row["supplier"]
-        is_protected = supplier_name in protected_suppliers
-        is_preferred = supplier_name in preferred_suppliers
-        high_spend = float(row["spend"]) >= float(high_spend_cutoff)
-        strong_perf = float(row["performance_score"]) >= float(strong_perf_cutoff)
-        weak_perf = float(row["performance_score"]) <= float(weak_perf_cutoff)
-        highly_replaceable = float(row["replaceability_score"]) >= float(replaceable_cutoff)
-        defect_median = float(supplier_decision_frame["defect_rate"].median()) if len(supplier_decision_frame) else 0.0
-        lead_time_median = float(supplier_decision_frame["avg_lead_time"].median()) if len(supplier_decision_frame) else 0.0
-        risk_median = float(supplier_decision_frame["avg_risk_score"].median()) if len(supplier_decision_frame) else 0.0
-        protected_but_risky = is_protected and (
-            weak_perf
-            or float(row["supplier_risk_score"]) >= float(supplier_risk_cutoff)
-            or float(row["defect_rate"]) > defect_median
-            or float(row["avg_lead_time"]) > lead_time_median
-            or float(row["avg_risk_score"]) > risk_median
+        decision, reason, policy_basis = classify_supplier_decision(
+            row,
+            respect_constraints=respect_constraints,
+            include_accepted_risk=include_accepted_risk,
         )
-
-        if protected_but_risky:
-            decision = "Keep and Monitor"
-            reason = (
-                "Retained only because this supplier currently supports single-source or high-risk component coverage; "
-                "work with the supplier to lower its risk score through a formal improvement plan, and qualify an alternate source in case replacement is still needed later."
-            )
-        elif is_protected or is_preferred or (high_spend and strong_perf):
-            decision = "Keep / Consolidate To"
-            reason = "Protected supply coverage or preferred performance across overlapping components."
-        elif (not is_protected) and highly_replaceable and weak_perf and int(row["preferred_component_count"]) == 0:
-            decision = "Eliminate / De-prioritize"
-            reason = "Replaceable supplier with weaker quality, lead time, and limited strategic dependence."
-        else:
-            decision = "Keep and Monitor"
-            reason = "Valuable enough to retain, but performance and risk should improve before expansion."
 
         savings_rate = 0.0
         if decision == "Eliminate / De-prioritize":
             savings_rate = 0.06
         elif decision == "Keep and Monitor":
             savings_rate = 0.03
-        elif decision == "Keep / Consolidate To" and not is_protected:
+        elif decision == "Keep / Consolidate To" and not bool(row.get("protected_flag", False)):
             savings_rate = 0.02
         estimated_savings = round(float(row["spend"]) * savings_rate, 2)
 
@@ -907,33 +1235,44 @@ def classify_suppliers(
             issues.append("elevated external risk")
         if bool(row["supports_single_source"]):
             issues.append("single-source dependency")
-        if protected_but_risky:
-            issues.append("retained only because current coverage depends on it")
+        if bool(row.get("protected_flag", False)):
+            issues.append("protected supplier policy")
+        if bool(row.get("risk_accepted", False)):
+            issues.append("accepted risk exposure")
+        if bool(row.get("engineering_locked", False)) or bool(row.get("regulatory_locked", False)):
+            issues.append("engineering or regulatory lock")
+        if bool(row.get("component_single_source_required", False)):
+            issues.append("required single-source component")
         if not issues:
             issues.append("maintain competitiveness")
 
-        if decision == "Keep / Consolidate To":
+        if decision == "Keep (Constraint Applied)":
+            action_plan = "Retain this supplier under the current business or technical constraint, document the restriction clearly, and review whether alternate sourcing can be qualified over time."
+        elif decision == "Risk Accepted":
+            action_plan = "Maintain supply continuity while documenting the accepted-risk rationale, monitoring exposure, and revisiting the decision at the next sourcing review."
+        elif decision == "Keep / Consolidate To":
             action_plan = "Increase award share where overlap exists, lock in continuity plans, and pursue structured cost negotiations."
         elif decision == "Eliminate / De-prioritize":
             action_plan = "Reallocate demand toward stronger alternatives, restrict new awards, and exit after qualification and inventory safeguards."
-        elif protected_but_risky:
-            action_plan = (
-                "Retain temporarily for current coverage, work with the supplier now to lower its quality, lead-time, or risk issues through a formal improvement plan, "
-                "and qualify an alternate source so future awards can move away from this supplier if the risk score does not improve enough."
-            )
         else:
             action_plan = "Keep active with a corrective scorecard focused on quality, lead time, and risk-mitigation checkpoints."
 
-        decision_rank = {"Keep / Consolidate To": 1, "Keep and Monitor": 2, "Eliminate / De-prioritize": 3}[decision]
+        decision_rank = get_decision_rank(decision)
         decisions.append(
             {
                 "supplier": supplier_name,
                 "decision": decision,
                 "decision_reason": reason,
+                "policy_basis": policy_basis,
                 "issues": ", ".join(issues),
                 "supplier_action_plan": action_plan,
                 "estimated_savings": estimated_savings,
                 "decision_rank": decision_rank,
+                "preferred_component_count": int(row.get("preferred_component_count", 0)),
+                "spend_importance_score": float(row.get("spend_importance_score", 0.0)),
+                "strategic_fit_score": float(row.get("strategic_fit_score", 0.0)),
+                "supplier_configuration_score": float(row.get("supplier_configuration_score", 0.0)),
+                "inverse_risk_score": float(row.get("inverse_risk_score", 0.0)),
             }
         )
 
@@ -1034,6 +1373,13 @@ def build_analytics(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
             avg_lead_time=("lead_time", "mean"),
             avg_risk_score=("risk_score", "mean"),
             avg_criticality=("criticality", "mean"),
+            supplier_protected=("supplier_protected", "max"),
+            contract_locked=("contract_locked", "max"),
+            do_not_eliminate=("do_not_eliminate", "max"),
+            risk_accepted=("risk_accepted", "max"),
+            component_single_source_required=("component_single_source_required", "max"),
+            engineering_locked=("engineering_locked", "max"),
+            regulatory_locked=("regulatory_locked", "max"),
         )
     )
     component_supplier_detail["defect_rate"] = safe_divide(component_supplier_detail["defects"], component_supplier_detail["units"], fill_value=0.0)
@@ -1057,10 +1403,14 @@ def build_analytics(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
             avg_lead_time=("avg_lead_time", "mean"),
             risk_score=("avg_risk_score", "mean"),
             criticality=("avg_criticality", "mean"),
+            component_single_source_required=("component_single_source_required", "max"),
+            engineering_locked=("engineering_locked", "max"),
+            regulatory_locked=("regulatory_locked", "max"),
         )
     )
     component_summary["defect_rate"] = safe_divide(component_summary["defects"], component_summary["units"], fill_value=0.0)
     component_summary["single_source_flag"] = component_summary["supplier_count"].eq(1)
+    component_summary["single_source_flag"] = component_summary["single_source_flag"] | component_summary["component_single_source_required"].fillna(False).astype(bool)
     component_summary["backup_supplier_flag"] = component_summary["supplier_count"].gt(1)
     component_summary["supplier_concentration"] = component_summary["largest_supplier_share"].clip(0, 1)
     dominant_supplier = (
@@ -1150,10 +1500,27 @@ def build_analytics(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
             avg_lead_time=("avg_lead_time", "mean"),
             avg_risk_score=("avg_risk_score", "mean"),
             component_count=("component", "nunique"),
+            supplier_protected=("supplier_protected", "max"),
+            contract_locked=("contract_locked", "max"),
+            do_not_eliminate=("do_not_eliminate", "max"),
+            risk_accepted=("risk_accepted", "max"),
+            component_single_source_required=("component_single_source_required", "max"),
+            engineering_locked=("engineering_locked", "max"),
+            regulatory_locked=("regulatory_locked", "max"),
         )
     )
     supplier_base["defect_rate"] = safe_divide(supplier_base["defects"], supplier_base["units"], fill_value=0.0)
     supplier_base["portfolio_share"] = safe_divide(supplier_base["spend"], supplier_base["spend"].sum(), fill_value=0.0)
+    for col in [
+        "supplier_protected",
+        "contract_locked",
+        "do_not_eliminate",
+        "risk_accepted",
+        "component_single_source_required",
+        "engineering_locked",
+        "regulatory_locked",
+    ]:
+        supplier_base[col] = supplier_base[col].fillna(False).astype(bool)
 
     component_flags = component_summary[
         ["component", "single_source_flag", "high_risk_flag", "strategic_priority_score", "supply_risk_score", "largest_supplier_share"]
@@ -1201,7 +1568,14 @@ def build_analytics(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
         + 0.15 * min_max_scale(supplier_summary["component_count"])
     ).round(2)
 
-    supplier_decisions = classify_suppliers(component_supplier_detail, component_summary, supplier_summary)
+    supplier_decisions = classify_suppliers(
+        component_supplier_detail,
+        component_summary,
+        supplier_summary,
+        optimization_objective="Balanced",
+        respect_constraints=True,
+        include_accepted_risk=True,
+    )
     supplier_summary = supplier_summary.merge(supplier_decisions, on="supplier", how="left")
     supplier_explainability = build_supplier_explainability(component_supplier_detail, component_summary, supplier_summary)
     supplier_summary = supplier_summary.merge(supplier_explainability, on="supplier", how="left")
@@ -1263,6 +1637,8 @@ def build_executive_summary(
     keep_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Keep / Consolidate To", "supplier"].tolist()
     eliminate_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Eliminate / De-prioritize", "supplier"].tolist()
     monitor_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Keep and Monitor", "supplier"].tolist()
+    constrained_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Keep (Constraint Applied)", "supplier"].tolist()
+    accepted_risk_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Risk Accepted", "supplier"].tolist()
     replacement_candidates = (
         supplier_summary.loc[
             supplier_summary.get("future_replacement_candidate", pd.Series(dtype=str)).eq("Replace Over Time"),
@@ -1297,6 +1673,14 @@ def build_executive_summary(
     keep_count = len(keep_suppliers)
     eliminate_count = len(eliminate_suppliers)
     monitor_count = len(monitor_suppliers)
+    constrained_count = len(constrained_suppliers)
+    accepted_risk_count = len(accepted_risk_suppliers)
+    constrained_spend = float(
+        supplier_summary.loc[supplier_summary["decision"].eq("Keep (Constraint Applied)"), "spend"].sum()
+    ) if not supplier_summary.empty else 0.0
+    accepted_risk_spend = float(
+        supplier_summary.loc[supplier_summary["decision"].eq("Risk Accepted"), "spend"].sum()
+    ) if not supplier_summary.empty else 0.0
     replacement_summary_text = (
         f"Suppliers that should be retained for now but replaced over time include {format_name_list(replacement_candidates, max_items=4)}. "
         if replacement_candidates
@@ -1309,8 +1693,9 @@ def build_executive_summary(
         f"The highest-risk component is {highest_risk_component['component']} with a supply risk score of {highest_risk_component['supply_risk_score']:.1f}. "
         f"The highest strategic priority component is {highest_priority_component['component']} because of {priority_reason}. "
         f"Top supplier spend sits with {top_supplier['supplier']} at ${top_supplier['spend']:,.0f}, while {top_component['component']} is the largest-spend component at ${top_component['spend']:,.0f}. "
-        f"At this stage, the base analysis indicates a supplier landscape with {keep_count} stronger consolidation candidates, {eliminate_count} potential exit or de-prioritization candidates, and {monitor_count} suppliers that may warrant closer review. "
+        f"At this stage, the base analysis indicates a supplier landscape with {keep_count} stronger consolidation candidates, {eliminate_count} potential exit or de-prioritization candidates, {monitor_count} suppliers that may warrant closer review, {accepted_risk_count} suppliers tagged as accepted risk, and {constrained_count} suppliers retained under explicit constraints. "
         + replacement_summary_text
+        + f"${constrained_spend:,.0f} of spend is tied to protected or constrained suppliers, while ${accepted_risk_spend:,.0f} is currently classified as accepted risk. "
         + 
         f"The next step is to run scenarios to test whether single-source exposure, high-risk components, and supplier fragmentation can be reduced without creating new uncovered demand or unacceptable savings tradeoffs. "
         f"Specific supplier actions, economic tradeoffs, and rationale should be confirmed only after an applied scenario is evaluated."
@@ -1331,18 +1716,24 @@ def build_executive_summary(
             [
                 executive_actions_source["decision"].eq("Eliminate / De-prioritize"),
                 executive_actions_source["decision"].eq("Keep / Consolidate To"),
+                executive_actions_source["decision"].eq("Keep (Constraint Applied)"),
+                executive_actions_source["decision"].eq("Risk Accepted"),
             ],
-            ["Evaluate Exit Scenario", "Evaluate Consolidation Scenario"],
+            ["Evaluate Exit Scenario", "Evaluate Consolidation Scenario", "Honor Business Constraint", "Document Accepted Risk"],
             default="Evaluate Monitoring Need",
         )
         executive_actions_source["action_display"] = np.select(
             [
                 executive_actions_source["decision"].eq("Eliminate / De-prioritize"),
                 executive_actions_source["decision"].eq("Keep / Consolidate To"),
+                executive_actions_source["decision"].eq("Keep (Constraint Applied)"),
+                executive_actions_source["decision"].eq("Risk Accepted"),
             ],
             [
                 "Run scenarios to test whether demand can move away from this supplier without creating new risk.",
                 "Run scenarios to test whether consolidating more volume here improves the score without increasing exposure.",
+                "Retain due to business or technical constraint, but document the lock and review whether alternate sourcing can be qualified later.",
+                "Retain under explicit risk acceptance, with clear governance on why the exposure remains acceptable for now.",
             ],
             default="Review quality, lead time, and exposure trends before deciding whether intervention is needed.",
         )
@@ -1358,10 +1749,14 @@ def build_executive_summary(
             [
                 supplier_action_plan_source["decision"].eq("Eliminate / De-prioritize"),
                 supplier_action_plan_source["decision"].eq("Keep / Consolidate To"),
+                supplier_action_plan_source["decision"].eq("Keep (Constraint Applied)"),
+                supplier_action_plan_source["decision"].eq("Risk Accepted"),
             ],
             [
                 "Current data suggests this supplier may be replaceable, but scenario testing should confirm whether exits are practical.",
                 "Current data suggests this supplier may be a strong consolidation candidate, but scenario testing should confirm whether expanding share is beneficial.",
+                "Current data suggests this supplier remains in-scope because of a business, engineering, regulatory, or contractual constraint rather than pure optimization.",
+                "Current data suggests this supplier remains active under an accepted-risk decision that should still be monitored and revisited.",
             ],
             default="Current data suggests this supplier may need closer review, but scenario testing should confirm whether action is required.",
         )
@@ -2159,9 +2554,15 @@ def build_supplier_retention_explainability_chart(supplier_summary: pd.DataFrame
     chart_data = supplier_summary.copy()
     if chart_data.empty:
         return alt.Chart(pd.DataFrame({"supplier": [], "value": []})).mark_bar()
-    chart_data["preferred_component_count"] = pd.to_numeric(chart_data.get("preferred_component_count", 0), errors="coerce").fillna(0)
-    chart_data["protected_component_count_detail"] = pd.to_numeric(chart_data.get("protected_component_count_detail", 0), errors="coerce").fillna(0)
-    chart_data["Replacement Action"] = chart_data.get("future_replacement_candidate", "Retain Normally").astype(str)
+    default_zero_series = pd.Series(np.zeros(len(chart_data)), index=chart_data.index)
+    default_replacement_series = pd.Series(["Retain Normally"] * len(chart_data), index=chart_data.index)
+    chart_data["preferred_component_count"] = pd.to_numeric(
+        chart_data.get("preferred_component_count", default_zero_series), errors="coerce"
+    ).fillna(0)
+    chart_data["protected_component_count_detail"] = pd.to_numeric(
+        chart_data.get("protected_component_count_detail", default_zero_series), errors="coerce"
+    ).fillna(0)
+    chart_data["Replacement Action"] = chart_data.get("future_replacement_candidate", default_replacement_series).astype(str)
     chart_data["total_component_context"] = (
         chart_data["preferred_component_count"] + chart_data["protected_component_count_detail"]
     )
@@ -2224,7 +2625,17 @@ def build_future_replacement_supplier_chart(supplier_summary: pd.DataFrame) -> a
     chart_data = supplier_summary.copy()
     if chart_data.empty:
         return alt.Chart(pd.DataFrame({"supplier": [], "supplier_risk_score": []})).mark_circle()
-    chart_data["Replacement Action"] = chart_data.get("future_replacement_candidate", "Retain Normally").astype(str)
+    default_zero_series = pd.Series(np.zeros(len(chart_data)), index=chart_data.index)
+    default_replacement_series = pd.Series(["Retain Normally"] * len(chart_data), index=chart_data.index)
+    chart_data["preferred_component_count"] = pd.to_numeric(
+        chart_data.get("preferred_component_count", default_zero_series), errors="coerce"
+    ).fillna(0)
+    chart_data["protected_component_count_detail"] = pd.to_numeric(
+        chart_data.get("protected_component_count_detail", default_zero_series), errors="coerce"
+    ).fillna(0)
+    chart_data["supplier_risk_score"] = pd.to_numeric(chart_data.get("supplier_risk_score", default_zero_series), errors="coerce").fillna(0)
+    chart_data["spend"] = pd.to_numeric(chart_data.get("spend", default_zero_series), errors="coerce").fillna(0)
+    chart_data["Replacement Action"] = chart_data.get("future_replacement_candidate", default_replacement_series).astype(str)
     chart_data["label"] = np.where(
         chart_data["Replacement Action"].eq("Replace Over Time"),
         chart_data["supplier"].astype(str),
@@ -2243,13 +2654,13 @@ def build_future_replacement_supplier_chart(supplier_summary: pd.DataFrame) -> a
             ),
             size=alt.Size("spend:Q", title="Spend", scale=alt.Scale(range=[160, 1400])),
             tooltip=[
-                "supplier",
-                "supplier_risk_score",
-                "protected_component_count_detail",
-                "preferred_component_count",
-                "Replacement Action",
-                "decision",
-                "spend",
+                alt.Tooltip("supplier:N", title="Supplier"),
+                alt.Tooltip("supplier_risk_score:Q", title="Supplier Risk Score"),
+                alt.Tooltip("protected_component_count_detail:Q", title="Protected Component Count"),
+                alt.Tooltip("preferred_component_count:Q", title="Preferred Component Count"),
+                alt.Tooltip("Replacement Action:N", title="Replacement Action"),
+                alt.Tooltip("decision:N", title="Decision"),
+                alt.Tooltip("spend:Q", title="Spend"),
             ],
         )
         .properties(height=360)
@@ -3109,6 +3520,29 @@ def build_auto_mitigation_assignments(
 
     def best_supplier_for_component(component_name: str) -> Optional[str]:
         blocked_supplier = single_source_suppliers.get(component_name)
+        retained_component_options = detail.loc[
+            detail["component"].eq(component_name)
+            & detail["supplier"].isin(selected_set)
+            & ~detail["supplier"].eq(blocked_supplier)
+        ].copy()
+        if not retained_component_options.empty:
+            retained_component_options = retained_component_options.sort_values(
+                ["defect_rate", "avg_lead_time", "avg_risk_score", "spend"],
+                ascending=[True, True, True, False],
+            )
+            return str(retained_component_options.iloc[0]["supplier"])
+
+        retained_supplier_options = supplier_summary.loc[
+            supplier_summary["supplier"].isin(selected_set)
+            & ~supplier_summary["supplier"].eq(blocked_supplier)
+        ].copy()
+        if not retained_supplier_options.empty:
+            retained_supplier_options = retained_supplier_options.sort_values(
+                ["supplier_risk_score", "performance_score", "avg_lead_time", "spend"],
+                ascending=[True, False, True, False],
+            )
+            return str(retained_supplier_options.iloc[0]["supplier"])
+
         if component_name in single_source_suppliers:
             options = supplier_summary.loc[~supplier_summary["supplier"].eq(blocked_supplier)].copy()
             if options.empty:
@@ -3215,13 +3649,28 @@ def score_supplier_scenario(
     mitigation_assignments: Tuple[str, ...],
     metrics: Dict[str, float],
     scenario_df: pd.DataFrame,
-    optimization_objective: str = "Best Overall",
+    optimization_objective: str = "Balanced",
+    target_total_supplier_spend: Optional[float] = None,
+    accept_single_source_exposure: bool = False,
+    accept_high_risk_exposure: bool = False,
+    require_full_component_coverage: bool = True,
+    favor_fewer_suppliers: bool = False,
+    honor_spend_target_strictly: bool = False,
 ) -> Dict[str, object]:
+    optimization_objective = normalize_scenario_objective_name(optimization_objective)
     supplier_summary = analytics["supplier_summary"]
     selected_frame = supplier_summary.loc[supplier_summary["supplier"].isin(set(selected_suppliers))].copy()
     avg_supplier_risk = float(selected_frame["supplier_risk_score"].mean()) if not selected_frame.empty else 100.0
     avg_performance = float(selected_frame["performance_score"].mean()) if not selected_frame.empty else 0.0
+    avg_configuration_score = float(selected_frame.get("supplier_configuration_score", pd.Series(dtype=float)).mean()) if not selected_frame.empty else 0.0
+    avg_spend_importance = float(selected_frame.get("spend_importance_score", pd.Series(dtype=float)).mean()) if not selected_frame.empty else 0.0
     total_spend = float(analytics["component_summary"]["spend"].sum()) if len(analytics["component_summary"]) else 1.0
+    selected_supplier_spend = float(selected_frame["spend"].sum()) if not selected_frame.empty and "spend" in selected_frame.columns else 0.0
+    target_spend_value = max(float(target_total_supplier_spend or 0.0), 0.0)
+    target_spend_gap = abs(selected_supplier_spend - target_spend_value) if target_spend_value > 0 else 0.0
+    target_spend_gap_ratio = (target_spend_gap / max(target_spend_value, 1.0)) if target_spend_value > 0 else 0.0
+    selected_supplier_count = len(set(selected_suppliers))
+    portfolio_supplier_count = max(int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else len(supplier_summary), 1)
 
     high_risk_components = int(scenario_df["Scenario Risk Level"].eq("High").sum()) if not scenario_df.empty else 0
     medium_risk_components = int(scenario_df["Scenario Risk Level"].eq("Medium").sum()) if not scenario_df.empty else 0
@@ -3231,12 +3680,19 @@ def score_supplier_scenario(
     aggregate_risk_reduction = float(metrics.get("aggregate_risk_reduction", 0.0))
     mitigation_cost = float(metrics.get("mitigation_cost", 0.0))
     net_savings = float(metrics.get("net_savings", 0.0))
+    constrained_spend = float(selected_frame.loc[selected_frame["decision"].eq("Keep (Constraint Applied)"), "spend"].sum()) if not selected_frame.empty and "decision" in selected_frame.columns else 0.0
+    accepted_risk_spend = float(selected_frame.loc[selected_frame["decision"].eq("Risk Accepted"), "spend"].sum()) if not selected_frame.empty and "decision" in selected_frame.columns else 0.0
+    single_source_penalty_weight = 25.0 if accept_single_source_exposure else 120.0
+    high_risk_penalty_weight = 45.0 if accept_high_risk_exposure else 140.0
+    uncovered_penalty_weight = 520.0 if require_full_component_coverage else 160.0
+    spend_alignment_bonus = 85.0 if honor_spend_target_strictly else 130.0
+    spend_alignment_penalty = 180.0 if honor_spend_target_strictly else 70.0
 
     impacts = [
         ("Covered spend", float(metrics.get("covered_spend_share", 0.0)) * 1000.0, f"{float(metrics.get('covered_spend_share', 0.0)):.0%}"),
-        ("Uncovered components", -float(metrics.get("uncovered_components", 0)) * 350.0, int(metrics.get("uncovered_components", 0))),
-        ("High-risk components", -high_risk_components * 140.0, high_risk_components),
-        ("Single-source components", -float(metrics.get("single_source_components", 0)) * 120.0, int(metrics.get("single_source_components", 0))),
+        ("Uncovered components", -float(metrics.get("uncovered_components", 0)) * uncovered_penalty_weight, int(metrics.get("uncovered_components", 0))),
+        ("High-risk components", -high_risk_components * high_risk_penalty_weight, high_risk_components),
+        ("Single-source components", -float(metrics.get("single_source_components", 0)) * single_source_penalty_weight, int(metrics.get("single_source_components", 0))),
         ("Medium-risk components", -medium_risk_components * 40.0, medium_risk_components),
         ("Mitigated uncovered", float(metrics.get("mitigated_uncovered_components", 0)) * 80.0, int(metrics.get("mitigated_uncovered_components", 0))),
         ("Mitigated single-source", float(metrics.get("mitigated_single_source_components", 0)) * 70.0, int(metrics.get("mitigated_single_source_components", 0))),
@@ -3247,25 +3703,66 @@ def score_supplier_scenario(
         ("Low-risk components", low_risk_components * 10.0, low_risk_components),
         ("Average supplier performance", (avg_performance / 100.0) * 70.0, round(avg_performance, 1)),
         ("Average supplier risk", -(avg_supplier_risk / 100.0) * 65.0, round(avg_supplier_risk, 1)),
+        ("Average configuration score", (avg_configuration_score / 100.0) * 90.0, round(avg_configuration_score, 1)),
+        ("Average spend importance", (avg_spend_importance / 100.0) * 65.0, round(avg_spend_importance, 1)),
         ("Distinct mitigation suppliers", -mitigation_count * 4.0, mitigation_count),
     ]
+    if favor_fewer_suppliers:
+        impacts.append(
+            (
+                "Fewer supplier preference",
+                (1.0 - (selected_supplier_count / max(portfolio_supplier_count, 1))) * 140.0,
+                selected_supplier_count,
+            )
+        )
+    if target_spend_value > 0:
+        impacts.append(
+            (
+                "Target total supplier spend alignment",
+                max(0.0, 1.0 - target_spend_gap_ratio) * spend_alignment_bonus - min(target_spend_gap_ratio, 1.5) * spend_alignment_penalty,
+                f"{selected_supplier_spend:,.0f} vs {target_spend_value:,.0f}",
+            )
+        )
     objective_bonus = 0.0
-    if optimization_objective == "Best Net Savings":
+    if optimization_objective == "Net Savings":
         objective_bonus = (
             (net_savings / max(total_spend, 1.0)) * 820.0
             - high_risk_components * 35.0
             - float(metrics.get("single_source_components", 0)) * 35.0
             - float(metrics.get("uncovered_components", 0)) * 120.0
         )
-    elif optimization_objective == "Best Risk Reduction":
+    elif optimization_objective == "Risk Reduction":
         objective_bonus = (
             aggregate_risk_reduction * 5.5
-            - high_risk_components * 110.0
-            - float(metrics.get("single_source_components", 0)) * 90.0
+            - high_risk_components * (65.0 if accept_high_risk_exposure else 110.0)
+            - float(metrics.get("single_source_components", 0)) * (30.0 if accept_single_source_exposure else 90.0)
             - medium_risk_components * 25.0
-            - float(metrics.get("uncovered_components", 0)) * 180.0
+            - float(metrics.get("uncovered_components", 0)) * (260.0 if require_full_component_coverage else 90.0)
+        )
+    elif optimization_objective == "Spend Leverage":
+        objective_bonus = (
+            (avg_spend_importance / 100.0) * 240.0
+            + (net_savings / max(total_spend, 1.0)) * 700.0
+            + float(metrics.get("covered_spend_share", 0.0)) * 240.0
+            - float(metrics.get("uncovered_components", 0)) * (180.0 if require_full_component_coverage else 70.0)
+        )
+    elif optimization_objective == "Total Spend":
+        objective_bonus = (
+            max(0.0, 1.0 - target_spend_gap_ratio) * (340.0 if honor_spend_target_strictly else 260.0)
+            + (float(metrics.get("covered_spend_share", 0.0)) * 160.0)
+            - float(metrics.get("uncovered_components", 0)) * (260.0 if require_full_component_coverage else 110.0)
+            - high_risk_components * (20.0 if accept_high_risk_exposure else 55.0)
+        )
+    elif optimization_objective == "Constraint-Aware Review":
+        objective_bonus = (
+            (avg_configuration_score / 100.0) * 180.0
+            + (constrained_spend / max(total_spend, 1.0)) * 220.0
+            + (accepted_risk_spend / max(total_spend, 1.0)) * 120.0
+            - float(metrics.get("uncovered_components", 0)) * 140.0
         )
     impacts.append((f"Objective emphasis ({optimization_objective})", objective_bonus, optimization_objective))
+    impacts.append(("Constrained spend", (constrained_spend / max(total_spend, 1.0)) * 80.0, f"${constrained_spend:,.0f}"))
+    impacts.append(("Accepted risk spend", (accepted_risk_spend / max(total_spend, 1.0)) * 55.0, f"${accepted_risk_spend:,.0f}"))
     score = float(sum(item[1] for item in impacts))
     breakdown = pd.DataFrame(impacts, columns=["Factor", "Impact", "Value"])
     breakdown["Impact"] = breakdown["Impact"].round(2)
@@ -3277,6 +3774,9 @@ def score_supplier_scenario(
         "low_risk_components": low_risk_components,
         "avg_supplier_risk": round(avg_supplier_risk, 2),
         "avg_performance": round(avg_performance, 2),
+        "avg_configuration_score": round(avg_configuration_score, 2),
+        "selected_supplier_spend": round(selected_supplier_spend, 2),
+        "target_total_supplier_spend": round(target_spend_value, 2),
         "optimization_objective": optimization_objective,
         "breakdown": breakdown,
     }
@@ -3285,10 +3785,24 @@ def score_supplier_scenario(
 @st.cache_data(show_spinner=False)
 def recommend_best_supplier_scenario(
     analytics: Dict[str, pd.DataFrame],
-    optimization_objective: str = "Best Overall",
+    optimization_objective: str = "Balanced",
+    respect_constraints: bool = True,
+    include_accepted_risk: bool = True,
+    ignore_suppliers_below: float = 0.0,
+    focus_on_suppliers_at_or_above: float = 0.0,
+    target_total_supplier_spend: Optional[float] = None,
+    accept_single_source_exposure: bool = False,
+    accept_high_risk_exposure: bool = False,
+    require_full_component_coverage: bool = True,
+    favor_fewer_suppliers: bool = False,
+    allow_mitigation_suppliers: bool = True,
+    honor_spend_target_strictly: bool = False,
+    do_not_exceed_spend_target: bool = False,
 ) -> Dict[str, object]:
-    supplier_summary = analytics["supplier_summary"].copy()
-    all_suppliers = supplier_summary["supplier"].dropna().astype(str).tolist()
+    optimization_objective = normalize_scenario_objective_name(optimization_objective)
+    full_supplier_summary = analytics["supplier_summary"].copy()
+    supplier_summary = full_supplier_summary.copy()
+    all_suppliers = full_supplier_summary["supplier"].dropna().astype(str).tolist()
     if not all_suppliers:
         return {
             "selected_suppliers": tuple(),
@@ -3300,16 +3814,50 @@ def recommend_best_supplier_scenario(
             "rationale": "No suppliers were available to evaluate.",
         }
 
-    ranked_suppliers = supplier_summary.sort_values(
-        ["decision_rank", "performance_score", "supplier_risk_score", "spend"],
-        ascending=[True, False, True, False],
-    )["supplier"].tolist()
-    required_suppliers = get_required_single_source_suppliers(analytics)
+    if ignore_suppliers_below > 0:
+        supplier_summary = supplier_summary.loc[supplier_summary["spend"] >= float(ignore_suppliers_below)].copy()
+    spend_focus_threshold = max(float(focus_on_suppliers_at_or_above), 0.0)
+    if spend_focus_threshold > 0 and not supplier_summary.empty:
+        supplier_summary = supplier_summary.loc[supplier_summary["spend"] >= spend_focus_threshold].copy()
+    if supplier_summary.empty:
+        supplier_summary = full_supplier_summary.copy()
+
+    required_suppliers = list(get_required_single_source_suppliers(analytics))
+    if accept_single_source_exposure:
+        required_suppliers = []
+    if respect_constraints:
+        required_suppliers.extend(
+            full_supplier_summary.loc[
+                full_supplier_summary["supplier_protected"]
+                | full_supplier_summary["contract_locked"]
+                | full_supplier_summary["do_not_eliminate"],
+                "supplier",
+            ].astype(str).tolist()
+        )
+    if include_accepted_risk:
+        required_suppliers.extend(
+            full_supplier_summary.loc[full_supplier_summary["risk_accepted"], "supplier"].astype(str).tolist()
+        )
+    required_suppliers = sorted(set(required_suppliers))
     required_set = set(required_suppliers)
+
+    if required_suppliers:
+        required_supplier_frame = full_supplier_summary.loc[
+            full_supplier_summary["supplier"].astype(str).isin(required_set)
+        ].copy()
+        supplier_summary = pd.concat([supplier_summary, required_supplier_frame], ignore_index=True).drop_duplicates(
+            subset=["supplier"]
+        )
+
+    ranked_suppliers = supplier_summary.sort_values(
+        ["decision_rank", "supplier_configuration_score", "performance_score", "supplier_risk_score", "spend"],
+        ascending=[True, False, False, True, False],
+    )["supplier"].tolist()
     optional_suppliers = [supplier for supplier in ranked_suppliers if supplier not in required_set]
 
     best_result: Optional[Dict[str, object]] = None
     tested_scenarios = 0
+    spend_cap_filtered_scenarios = 0
     min_selected_count = max(2 if len(all_suppliers) >= 2 else 1, len(required_suppliers))
     max_selected_count = len(all_suppliers)
     max_pool_size = min(len(ranked_suppliers), 8)
@@ -3325,8 +3873,14 @@ def recommend_best_supplier_scenario(
 
         for combo in itertools.combinations(candidate_optional_pool, extra_slots):
             selected_suppliers = tuple(sorted(required_set.union(combo)))
-            mitigation_assignments = build_auto_mitigation_assignments(analytics, selected_suppliers)
+            mitigation_assignments = (
+                build_auto_mitigation_assignments(analytics, selected_suppliers)
+                if allow_mitigation_suppliers
+                else tuple()
+            )
             metrics, scenario_df, _ = build_consolidation_scenario(analytics, selected_suppliers, mitigation_assignments)
+            if require_full_component_coverage and int(metrics.get("uncovered_components", 0)) > 0:
+                continue
             scorecard = score_supplier_scenario(
                 analytics,
                 selected_suppliers,
@@ -3334,7 +3888,20 @@ def recommend_best_supplier_scenario(
                 metrics,
                 scenario_df,
                 optimization_objective=optimization_objective,
+                target_total_supplier_spend=target_total_supplier_spend,
+                accept_single_source_exposure=accept_single_source_exposure,
+                accept_high_risk_exposure=accept_high_risk_exposure,
+                require_full_component_coverage=require_full_component_coverage,
+                favor_fewer_suppliers=favor_fewer_suppliers,
+                honor_spend_target_strictly=honor_spend_target_strictly,
             )
+            if (
+                do_not_exceed_spend_target
+                and float(target_total_supplier_spend or 0.0) > 0.0
+                and float(scorecard.get("selected_supplier_spend", 0.0)) > float(target_total_supplier_spend)
+            ):
+                spend_cap_filtered_scenarios += 1
+                continue
             tested_scenarios += 1
 
             result = {
@@ -3348,6 +3915,13 @@ def recommend_best_supplier_scenario(
                 best_result = result
 
     if best_result is None:
+        if do_not_exceed_spend_target and float(target_total_supplier_spend or 0.0) > 0.0 and spend_cap_filtered_scenarios > 0:
+            no_result_reason = (
+                f"No viable scenarios stayed at or below the spend target of {format_currency_compact(float(target_total_supplier_spend))} "
+                "after applying the current coverage, risk, and policy posture."
+            )
+        else:
+            no_result_reason = "No viable scenarios were identified from the candidate pool."
         return {
             "selected_suppliers": tuple(),
             "mitigation_assignments": tuple(),
@@ -3355,11 +3929,37 @@ def recommend_best_supplier_scenario(
             "scenario_df": pd.DataFrame(),
             "scorecard": {},
             "tested_scenarios": 0,
-            "rationale": "No viable scenarios were identified from the candidate pool.",
+            "rationale": no_result_reason,
         }
 
     metrics = best_result["metrics"]
     scorecard = best_result["scorecard"]
+    constrained_supplier_names = (
+        full_supplier_summary.loc[
+            full_supplier_summary["supplier"].astype(str).isin(best_result.get("selected_suppliers", ()))
+            & (
+                full_supplier_summary["supplier_protected"]
+                | full_supplier_summary["contract_locked"]
+                | full_supplier_summary["do_not_eliminate"]
+            ),
+            "supplier",
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+    accepted_risk_supplier_names = (
+        full_supplier_summary.loc[
+            full_supplier_summary["supplier"].astype(str).isin(best_result.get("selected_suppliers", ()))
+            & full_supplier_summary["risk_accepted"],
+            "supplier",
+        ]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
     rationale = (
         f"Recommended under the `{optimization_objective}` objective with {len(best_result.get('selected_suppliers', ()))} selected suppliers because it delivers the strongest scenario score of {float(scorecard.get('score', 0.0)):,.1f}, "
         f"covers {metrics.get('covered_spend_share', 0.0):.0%} of spend, "
@@ -3367,6 +3967,24 @@ def recommend_best_supplier_scenario(
         f"results in {scorecard.get('high_risk_components', 0)} high-risk components, "
         f"and lands at net savings of ${float(metrics.get('net_savings', 0.0)):,.0f} after mitigation cost."
     )
+    if float(scorecard.get("target_total_supplier_spend", 0.0)) > 0:
+        rationale += (
+            f" The selected supplier set carries {format_currency_compact(float(scorecard.get('selected_supplier_spend', 0.0)))} of spend versus a target of "
+            f"{format_currency_compact(float(scorecard.get('target_total_supplier_spend', 0.0)))}."
+        )
+    if optimization_objective == "Total Spend":
+        if constrained_supplier_names:
+            rationale += (
+                " Constraint note: "
+                + format_name_list(constrained_supplier_names, max_items=5)
+                + " remained in scope because they are protected or locked."
+            )
+        if accepted_risk_supplier_names:
+            rationale += (
+                " Accepted-risk note: "
+                + format_name_list(accepted_risk_supplier_names, max_items=5)
+                + " remained eligible under the current policy settings."
+            )
     best_result["tested_scenarios"] = tested_scenarios
     best_result["rationale"] = rationale
     return best_result
@@ -3578,6 +4196,13 @@ def build_applied_scenario_analytics(
             avg_lead_time=("avg_lead_time", "mean"),
             avg_risk_score=("avg_risk_score", "mean"),
             component_count=("component", "nunique"),
+            supplier_protected=("supplier_protected", "max"),
+            contract_locked=("contract_locked", "max"),
+            do_not_eliminate=("do_not_eliminate", "max"),
+            risk_accepted=("risk_accepted", "max"),
+            component_single_source_required=("component_single_source_required", "max"),
+            engineering_locked=("engineering_locked", "max"),
+            regulatory_locked=("regulatory_locked", "max"),
         )
     )
     scenario_supplier_summary["defect_rate"] = safe_divide(
@@ -3586,6 +4211,16 @@ def build_applied_scenario_analytics(
     scenario_supplier_summary["portfolio_share"] = safe_divide(
         scenario_supplier_summary["spend"], scenario_supplier_summary["spend"].sum(), fill_value=0.0
     )
+    for col in [
+        "supplier_protected",
+        "contract_locked",
+        "do_not_eliminate",
+        "risk_accepted",
+        "component_single_source_required",
+        "engineering_locked",
+        "regulatory_locked",
+    ]:
+        scenario_supplier_summary[col] = scenario_supplier_summary[col].fillna(False).astype(bool)
 
     scenario_component_flags = scenario_component_summary[
         ["component", "single_source_flag", "high_risk_flag", "strategic_priority_score", "supply_risk_score"]
@@ -3640,6 +4275,9 @@ def build_applied_scenario_analytics(
         scenario_detail,
         scenario_component_summary,
         scenario_supplier_summary,
+        optimization_objective="Balanced",
+        respect_constraints=True,
+        include_accepted_risk=True,
     )
     scenario_supplier_summary = scenario_supplier_summary.merge(
         scenario_supplier_decisions, on="supplier", how="left"
@@ -4793,6 +5431,48 @@ def render_kpi_cards(
                 unsafe_allow_html=True,
             )
 
+    constrained_spend = float(
+        supplier_summary.loc[supplier_summary.get("decision", pd.Series(dtype=str)).eq("Keep (Constraint Applied)"), "spend"].sum()
+    ) if not supplier_summary.empty else 0.0
+    accepted_risk_spend = float(
+        supplier_summary.loc[supplier_summary.get("decision", pd.Series(dtype=str)).eq("Risk Accepted"), "spend"].sum()
+    ) if not supplier_summary.empty else 0.0
+    single_source_exposure_spend = float(
+        component_summary.loc[component_summary.get("single_source_flag", pd.Series(dtype=bool)), "spend"].sum()
+    ) if not component_summary.empty else 0.0
+    high_spend_cutoff = component_summary["spend"].quantile(0.75) if not component_summary.empty and "spend" in component_summary.columns else 0.0
+    high_spend_consolidation_opportunity = float(
+        supplier_summary.loc[supplier_summary.get("decision", pd.Series(dtype=str)).eq("Keep / Consolidate To") & supplier_summary["spend"].ge(high_spend_cutoff), "spend"].sum()
+    ) if not supplier_summary.empty else 0.0
+    protected_supplier_count = int(
+        (
+            supplier_summary.get("supplier_protected", pd.Series(dtype=bool)).fillna(False).astype(bool)
+            | supplier_summary.get("contract_locked", pd.Series(dtype=bool)).fillna(False).astype(bool)
+            | supplier_summary.get("do_not_eliminate", pd.Series(dtype=bool)).fillna(False).astype(bool)
+        ).sum()
+    ) if not supplier_summary.empty else 0
+    with st.expander("Policy-Aware KPI Details"):
+        policy_cols = st.columns(5)
+        policy_items = [
+            ("Constrained Spend", format_currency_compact(constrained_spend), "Spend tied to protected or locked suppliers."),
+            ("Accepted Risk Spend", format_currency_compact(accepted_risk_spend), "Spend currently carried under explicit risk acceptance."),
+            ("Single-Source Exposure", format_currency_compact(single_source_exposure_spend), "Spend still dependent on one effective supplier."),
+            ("High-Spend Consolidation Opportunity", format_currency_compact(high_spend_consolidation_opportunity), "Spend sitting with high-value keep/consolidate candidates."),
+            ("Protected Supplier Count", f"{protected_supplier_count}", "Suppliers explicitly protected by policy or commercial lock."),
+        ]
+        for col, (label, value, help_text) in zip(policy_cols, policy_items):
+            with col:
+                st.markdown(
+                    f"""
+                    <div class="executive-kpi-card">
+                        <div class="executive-kpi-label">{label}</div>
+                        <div class="executive-kpi-value">{value}</div>
+                        <div class="executive-kpi-help">{help_text}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
 
 def build_executive_dashboard_summary(
     analytics: Dict[str, pd.DataFrame],
@@ -4801,6 +5481,7 @@ def build_executive_dashboard_summary(
     scenario_applied: bool = False,
     negotiation_plan: Optional[pd.DataFrame] = None,
     action_supplier_summary: Optional[pd.DataFrame] = None,
+    optimization_objective: str = "Balanced",
 ) -> str:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
@@ -4821,6 +5502,8 @@ def build_executive_dashboard_summary(
     keep_decisions = {"Keep / Consolidate To", "Retained", "Retained For Now", "Retained + Mitigation", "Retained For Now + Mitigation"}
     monitor_decisions = {"Keep and Monitor", "Mitigation Only"}
     exit_decisions = {"Eliminate / De-prioritize", "Removed"}
+    constrained_count = int(decision_series.eq("Keep (Constraint Applied)").sum())
+    accepted_risk_count = int(decision_series.eq("Risk Accepted").sum())
     keep_count = int(decision_series.isin(keep_decisions).sum())
     monitor_count = int(decision_series.isin(monitor_decisions).sum())
     exit_count = int(decision_series.isin(exit_decisions).sum())
@@ -4835,6 +5518,16 @@ def build_executive_dashboard_summary(
     )
     single_source_components = component_summary.loc[component_summary["single_source_flag"], "component"].astype(str).tolist()
     high_risk_components = component_summary.loc[component_summary["high_risk_flag"], "component"].astype(str).tolist()
+    single_source_component_supplier_text = format_component_supplier_issue_list(
+        component_summary,
+        component_summary["single_source_flag"].fillna(False).astype(bool),
+        max_items=4,
+    )
+    high_risk_component_supplier_text = format_component_supplier_issue_list(
+        component_summary,
+        component_summary["high_risk_flag"].fillna(False).astype(bool),
+        max_items=4,
+    )
     avg_defect_rate = (
         weighted_average(supplier_summary["defect_rate"], supplier_summary["spend"])
         if {"defect_rate", "spend"}.issubset(supplier_summary.columns)
@@ -4851,6 +5544,17 @@ def build_executive_dashboard_summary(
     estimated_savings = build_estimated_savings_opportunity(executive_actions, supplier_summary)
     total_savings_opportunity = build_total_savings_opportunity(executive_actions, supplier_summary, negotiation_plan)
     negotiation_savings = max(0.0, total_savings_opportunity - estimated_savings)
+    constrained_spend = float(supplier_summary.loc[decision_series.eq("Keep (Constraint Applied)"), "spend"].sum())
+    accepted_risk_spend = float(supplier_summary.loc[decision_series.eq("Risk Accepted"), "spend"].sum())
+    objective_label = normalize_scenario_objective_name(optimization_objective)
+    objective_positioning = {
+        "Balanced": "balanced portfolio tradeoffs",
+        "Risk Reduction": "risk reduction over pure savings",
+        "Net Savings": "net savings over broader portfolio tradeoffs",
+        "Spend Leverage": "spend leverage over pure risk reduction",
+        "Total Spend": "target total supplier spend alignment while still carrying forward constraint realities",
+        "Constraint-Aware Review": "business constraints and accepted risk alongside analytical optimization",
+    }.get(objective_label, "balanced portfolio tradeoffs")
     top_action_text = ""
     if not executive_actions.empty and "Supplier" in executive_actions.columns:
         top_action_row = executive_actions.iloc[0]
@@ -4868,12 +5572,12 @@ def build_executive_dashboard_summary(
         f"{'The recommended scenario represents' if scenario_applied else 'The portfolio represents'} {format_currency_compact(total_spend)} across {supplier_count} suppliers and {component_count} components, with the heaviest concentration sitting with {top_supplier['supplier']} and {top_component['component']}."
     )
     single_source_sentence = (
-        f"Structural exposure remains concentrated in {count_label(len(single_source_components), 'single-source component', 'single-source components')}, led by {format_name_list(single_source_components, max_items=4)}."
+        f"Structural exposure remains concentrated in {count_label(len(single_source_components), 'single-source component', 'single-source components')}, led by {single_source_component_supplier_text}."
         if single_source_components
         else "The current view shows no single-source components, which materially lowers structural continuity risk."
     )
     decision_sentence = (
-        f"The supplier decision mix currently points to {count_label(exit_count, 'supplier', 'suppliers')} to exit or de-prioritize, {count_label(keep_count, 'supplier', 'suppliers')} to retain or consolidate toward, and {count_label(monitor_count, 'supplier', 'suppliers')} to keep under active review."
+        f"The supplier decision mix currently points to {count_label(exit_count, 'supplier', 'suppliers')} to exit or de-prioritize, {count_label(keep_count, 'supplier', 'suppliers')} to retain or consolidate toward, {count_label(monitor_count, 'supplier', 'suppliers')} to keep under active review, {count_label(accepted_risk_count, 'supplier', 'suppliers')} as accepted risk, and {count_label(constrained_count, 'supplier', 'suppliers')} retained under explicit constraints."
     )
     replacement_sentence = (
         f"Suppliers that should be retained for continuity now but either improved to lower their risk scores or replaced over time include {format_name_list(replacement_candidates, max_items=4)}."
@@ -4881,7 +5585,7 @@ def build_executive_dashboard_summary(
         else "No suppliers are currently tagged for retain-now improvement or replace-over-time treatment."
     )
     risk_sentence = (
-        f"The main risk and performance concerns sit in {format_name_list(high_risk_components, max_items=4)}, while the active supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defects and {avg_lead_time:,.1f} days average lead time."
+        f"The main risk and performance concerns sit in {high_risk_component_supplier_text}, while the active supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defects and {avg_lead_time:,.1f} days average lead time."
         if high_risk_components
         else f"The portfolio is relatively more stable on risk and performance, with roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defects and {avg_lead_time:,.1f} days average lead time across suppliers."
     )
@@ -4891,7 +5595,7 @@ def build_executive_dashboard_summary(
         )
     else:
         savings_sentence = (
-            f"The identified supplier actions represent about {format_currency_compact(estimated_savings)} in modeled savings opportunity."
+            f"The current decision screen suggests about {format_currency_compact(estimated_savings)} in modeled savings opportunity if the proposed supplier actions were pursued, but no scenario has been applied or validated yet."
             if estimated_savings > 0
             else "The current view is primarily signaling risk and concentration priorities rather than a material modeled savings opportunity."
         )
@@ -4903,6 +5607,9 @@ def build_executive_dashboard_summary(
             if not top_action_text
             else f"We should next use the Scenario Analysis tab to validate the proposed exit and consolidation moves, address single-source and high-risk exposure, and {top_action_text.lower()}."
         )
+    )
+    policy_sentence = (
+        f"{format_currency_compact(constrained_spend)} of spend is tied to protected or constrained suppliers, and {format_currency_compact(accepted_risk_spend)} is currently classified as accepted risk. The active decision mode emphasizes {objective_positioning}."
     )
     qualification_sentence = ""
     if scenario_applied and action_supplier_summary is not None and not action_supplier_summary.empty:
@@ -4929,7 +5636,7 @@ def build_executive_dashboard_summary(
             )
         if qualification_parts:
             qualification_sentence = "The remaining qualification work is to " + ", ".join(qualification_parts) + "."
-    sentences = [concentration_sentence, single_source_sentence, decision_sentence, replacement_sentence, risk_sentence, savings_sentence]
+    sentences = [concentration_sentence, single_source_sentence, decision_sentence, replacement_sentence, risk_sentence, savings_sentence, policy_sentence]
     if qualification_sentence:
         sentences.append(qualification_sentence)
     sentences.append(next_focus)
@@ -4942,6 +5649,7 @@ def build_executive_summary_text(analytics: Dict[str, pd.DataFrame], scenario_ap
         pd.DataFrame(),
         summary_text="",
         scenario_applied=scenario_applied,
+        optimization_objective="Balanced",
     )
 
 
@@ -5054,6 +5762,8 @@ def build_priority_actions_table(
             "Eliminate / De-prioritize": 1,
             "Keep / Consolidate To": 2,
             "Keep and Monitor": 3,
+            "Risk Accepted": 4,
+            "Keep (Constraint Applied)": 5,
         }
         priority_frame["__decision_priority"] = priority_frame["Decision"].map(lambda value: decision_priority.get(str(value), 9))
         priority_frame = priority_frame.sort_values(["__decision_priority", "Spend"], ascending=[True, False]).drop(columns="__decision_priority")
@@ -5335,6 +6045,7 @@ def render_executive_dashboard(
     negotiation_plan: Optional[pd.DataFrame] = None,
     base_analytics: Optional[Dict[str, pd.DataFrame]] = None,
     applied_scenario_metrics: Optional[Dict[str, float]] = None,
+    optimization_objective: str = "Balanced",
 ) -> None:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
@@ -5367,6 +6078,7 @@ def render_executive_dashboard(
         scenario_applied=scenario_applied,
         negotiation_plan=negotiation_plan,
         action_supplier_summary=action_supplier_summary,
+        optimization_objective=optimization_objective,
     )
     render_narrative_text(executive_summary, class_name="executive-summary-card")
     render_minor_spacing()
@@ -5436,7 +6148,9 @@ def render_executive_dashboard(
                 "Keep / Consolidate To": 5,
                 "Retained": 5,
                 "Keep and Monitor": 6,
-                "Mitigation Only": 7,
+                "Risk Accepted": 7,
+                "Keep (Constraint Applied)": 8,
+                "Mitigation Only": 9,
             }
         ).fillna(9)
         priority_actions = priority_actions.sort_values(["priority_rank", "Spend"], ascending=[True, False]).drop(columns=["priority_rank"])
@@ -5445,7 +6159,7 @@ def render_executive_dashboard(
         priority_actions["Supplier Risk Score"] = pd.to_numeric(priority_actions["Supplier Risk Score"], errors="coerce").fillna(0.0).round(1)
         st.dataframe(
             priority_actions,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "Supplier": st.column_config.TextColumn("Supplier", width="medium"),
@@ -5492,7 +6206,7 @@ def show_table(df: pd.DataFrame):
 def render_user_guide() -> None:
     st.subheader("How To Use This Tool")
     render_narrative_text(
-        "This dashboard follows one shared workflow: load procurement data, review how the fields were interpreted, then move through supplier risk, sourcing, scenario testing, and action planning."
+        "This dashboard follows one shared workflow: load procurement data, review how the fields were interpreted, confirm any policy constraints or accepted-risk overrides, then move through supplier risk, sourcing, scenario testing, and action planning."
     )
 
     st.markdown("### 1. CSV / Excel Workflow")
@@ -5500,11 +6214,13 @@ def render_user_guide() -> None:
     st.write("2. Choose `File Source`.")
     st.write("3. The dashboard will stay empty until you explicitly choose either `Bundled File Example` or `Upload Your File`.")
     st.write("4. If you choose `Upload Your File`, add a CSV, XLSX, or XLS procurement file in the sidebar.")
-    st.write("5. Open `Data Quality / Inputs` to confirm the active source, inferred fields, and normalized preview.")
-    st.write("6. Review `Executive Dashboard` for the summary view and top supplier actions.")
-    st.write("7. Use `Component Risk`, `Supplier Decisions`, and `Strategic Sourcing` to understand spend concentration, risk, and sourcing priorities.")
-    st.write("8. Use `Scenario Analysis` to test supplier selection and mitigation choices before applying a scenario to the dashboard.")
-    st.write("9. Use `Action Plan` and `Exports` when you are ready to communicate or hand off the recommendations.")
+    st.write("5. Open `Data Quality / Inputs` first after the file loads to confirm the active source, inferred fields, and normalized preview.")
+    st.write("6. Review `Policy / Constraint Inputs` to see which supplier and component flags were detected from the source data.")
+    st.write("7. Use `Policy Overrides (Editable)` if the source data does not yet contain the business constraints, accepted risk, or locked-item flags you need.")
+    st.write("8. Review `Executive Dashboard` for the summary view, top supplier actions, and policy-aware KPI details.")
+    st.write("9. Use `Component Risk`, `Supplier Decisions`, and `Strategic Sourcing` to understand spend concentration, risk, sourcing priorities, and where constraints are shaping the recommendation.")
+    st.write("10. Use `Scenario Analysis` to test supplier selection and mitigation choices before applying a scenario to the dashboard.")
+    st.write("11. Use `Action Plan` and `Exports` when you are ready to communicate or hand off the recommendations.")
 
     st.markdown("### 2. SQL Workflow")
     st.write("1. Change `Data Source` to `SQL Database` in the sidebar.")
@@ -5514,15 +6230,25 @@ def render_user_guide() -> None:
     st.write("5. Click `Test SQL Connection` if you want to verify the connection first.")
     st.write("6. Click `Load SQL Data` to run the query and route the results through the same normalization pipeline used for uploaded files.")
     st.write("7. Confirm the load by checking the sidebar `Current source:` label and the `Preview Raw SQL Rows` expander.")
-    st.write("8. Review `Data Quality / Inputs` before moving through the rest of the dashboard tabs.")
+    st.write("8. Open `Data Quality / Inputs` first after the SQL query loads before moving through the rest of the dashboard tabs.")
+    st.write("9. Use `Policy Overrides (Editable)` if you want to add protected suppliers, accepted risk, or component locks that were not supplied by the SQL source.")
+
+    st.markdown("### 3. Policy-Aware Decision Workflow")
+    st.write("1. Open `Data Quality / Inputs` first after the data is loaded.")
+    st.write("2. Start inside `Policy / Constraint Inputs` to see which flags were detected from the source data.")
+    st.write("3. If needed, update the checkboxes in `Policy Overrides (Editable)` to mark protected suppliers, accepted risk, or locked components.")
+    st.write("4. Then open `Executive Dashboard` and `Supplier Decisions` to see how constrained spend, accepted-risk spend, and the updated decision labels changed the portfolio view.")
+    st.write("5. Open `Scenario Analysis` after the base policy view looks right, and use `Respect Constraints` and `Include Accepted Risk` to control whether the recommendation engine honors those flags.")
+    st.write("6. Use `Spend Leverage` when the business wants to emphasize consolidation power and financial influence, and use `Constraint-Aware Review` when policy realism matters more than pure optimization.")
 
     st.markdown("### Recommended First Pass")
     st.write("1. Choose a data source explicitly.")
-    st.write("2. Validate the source and normalized preview in `Data Quality / Inputs`.")
-    st.write("3. Review the summary and KPIs in `Executive Dashboard`.")
-    st.write("4. Inspect `Component Risk` and `Supplier Decisions` to find the main exposure and supplier-action themes.")
-    st.write("5. Use `Scenario Analysis` only after the base dataset looks correct.")
-    st.write("6. Finish in `Action Plan` and `Exports` for follow-through.")
+    st.write("2. Open `Data Quality / Inputs` first and validate the source, normalized preview, and any policy flags.")
+    st.write("3. Confirm any policy flags or analyst overrides before trusting the supplier decisions.")
+    st.write("4. Review the summary and KPIs in `Executive Dashboard`.")
+    st.write("5. Inspect `Component Risk` and `Supplier Decisions` to find the main exposure and supplier-action themes.")
+    st.write("6. Use `Scenario Analysis` only after the base dataset and policy assumptions look correct.")
+    st.write("7. Finish in `Action Plan` and `Exports` for follow-through.")
 
 
 def build_normalized_input_preview(df: pd.DataFrame, diagnostics: List[str]) -> pd.DataFrame:
@@ -5546,6 +6272,45 @@ def build_normalized_input_preview(df: pd.DataFrame, diagnostics: List[str]) -> 
             preview[field_name] = status_text
 
     return preview
+
+
+def build_policy_constraint_summary(
+    normalized_df: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    if normalized_df.empty:
+        empty_supplier = pd.DataFrame(columns=["Supplier", "Constraint Flags"])
+        empty_component = pd.DataFrame(columns=["Component", "Constraint Flags"])
+        return empty_supplier, empty_component
+
+    supplier_flag_columns = {
+        "supplier_protected": "Protected Supplier",
+        "contract_locked": "Contract Locked",
+        "do_not_eliminate": "Do Not Eliminate",
+        "risk_accepted": "Risk Accepted",
+    }
+    component_flag_columns = {
+        "component_single_source_required": "Single-Source Required",
+        "engineering_locked": "Engineering Locked",
+        "regulatory_locked": "Regulatory Locked",
+    }
+
+    supplier_rows: List[Dict[str, str]] = []
+    supplier_frame = normalized_df[["supplier", *supplier_flag_columns.keys()]].copy()
+    supplier_frame = supplier_frame.groupby("supplier", as_index=False).max(numeric_only=False)
+    for row in supplier_frame.to_dict(orient="records"):
+        active_flags = [label for col, label in supplier_flag_columns.items() if bool(row.get(col, False))]
+        if active_flags:
+            supplier_rows.append({"Supplier": str(row.get("supplier", "")), "Constraint Flags": ", ".join(active_flags)})
+
+    component_rows: List[Dict[str, str]] = []
+    component_frame = normalized_df[["component", *component_flag_columns.keys()]].copy()
+    component_frame = component_frame.groupby("component", as_index=False).max(numeric_only=False)
+    for row in component_frame.to_dict(orient="records"):
+        active_flags = [label for col, label in component_flag_columns.items() if bool(row.get(col, False))]
+        if active_flags:
+            component_rows.append({"Component": str(row.get("component", "")), "Constraint Flags": ", ".join(active_flags)})
+
+    return pd.DataFrame(supplier_rows), pd.DataFrame(component_rows)
 
 
 def source_field_missing(diagnostics: List[str], field_name: str) -> bool:
@@ -5750,6 +6515,33 @@ def format_name_list(values: List[str], max_items: int = 5) -> str:
 def format_issue_name_list(values: List[str]) -> str:
     ordered_unique = list(dict.fromkeys(str(v) for v in values if str(v).strip()))
     return format_name_list(ordered_unique, max_items=max(len(ordered_unique), 1))
+
+
+def format_component_supplier_issue_list(
+    component_frame: pd.DataFrame,
+    mask: pd.Series,
+    max_items: int = 5,
+) -> str:
+    if component_frame.empty or len(component_frame) == 0:
+        return "none"
+    working = component_frame.loc[mask].copy()
+    if working.empty:
+        return "none"
+    if "component" not in working.columns:
+        return "none"
+    if "dominant_supplier" not in working.columns:
+        working["dominant_supplier"] = "Unknown Supplier"
+    items = (
+        working[["component", "dominant_supplier"]]
+        .dropna(subset=["component"])
+        .drop_duplicates()
+        .astype(str)
+    )
+    labels = [
+        f"{row['component']} via {row['dominant_supplier']}"
+        for row in items.head(max_items).to_dict(orient="records")
+    ]
+    return format_name_list(labels, max_items=max_items)
 
 
 def build_supplier_concentration_summary(component_summary: pd.DataFrame) -> str:
@@ -6137,7 +6929,7 @@ def build_scenario_compare_snapshot(
         "net_savings": float(metrics.get("net_savings", 0.0)),
         "aggregate_risk_reduction": float(metrics.get("aggregate_risk_reduction", 0.0)),
         "score": float(scorecard.get("score", 0.0)),
-        "optimization_objective": str(scorecard.get("optimization_objective", "Best Overall")),
+        "optimization_objective": str(scorecard.get("optimization_objective", "Balanced")),
         "score_breakdown": breakdown if isinstance(breakdown, pd.DataFrame) else pd.DataFrame(),
     }
 
@@ -6189,6 +6981,8 @@ def render_app():
         st.session_state["applied_scenario"] = None
     if "scenario_comparisons" not in st.session_state:
         st.session_state["scenario_comparisons"] = {}
+    if "policy_overrides_by_source" not in st.session_state:
+        st.session_state["policy_overrides_by_source"] = {}
     if "selected_sql_example" not in st.session_state:
         st.session_state["selected_sql_example"] = next(iter(SQL_EXAMPLE_QUERIES))
     if "last_selected_sql_example" not in st.session_state:
@@ -6252,7 +7046,7 @@ def render_app():
                     options=list(SQL_EXAMPLE_QUERIES.keys()),
                     key="selected_sql_example",
                 )
-                reset_example_query = st.button("Reset Query To Selected Example", use_container_width=True)
+                reset_example_query = st.button("Reset Query To Selected Example", width="stretch")
                 current_query_text = str(st.session_state.get("sql_query_text", ""))
                 if reset_example_query or st.session_state.get("last_selected_sql_example") != selected_example or not current_query_text.strip():
                     current_query_text = SQL_EXAMPLE_QUERIES[selected_example]
@@ -6266,7 +7060,7 @@ def render_app():
                 )
                 st.session_state["sql_query_text"] = current_query_text
                 st.caption("Example schemas: procurement_data, supplier_performance_summary, component_risk_summary.")
-                if st.button("Test SQL Connection", use_container_width=True):
+                if st.button("Test SQL Connection", width="stretch"):
                     try:
                         conn = get_sql_connection(sql_connection_mode)
                         conn.query("SELECT 1", ttl=0)
@@ -6276,7 +7070,7 @@ def render_app():
                             "error",
                             "Could not connect to the SQL database. Check secrets and connection settings.",
                         )
-                if st.button("Load SQL Data", type="primary", use_container_width=True):
+                if st.button("Load SQL Data", type="primary", width="stretch"):
                     try:
                         validated_query = validate_sql_query(st.session_state.get("sql_query_text", ""))
                         st.session_state["sql_query_text"] = validated_query
@@ -6295,7 +7089,7 @@ def render_app():
                     st.error(message_text)
 
     if not st.session_state.get("sidebar_auto_opened", False):
-        components.html(
+        st.html(
             """
             <script>
             const ensureSidebarOpen = () => {
@@ -6319,8 +7113,8 @@ def render_app():
             }, 250);
             </script>
             """,
-            height=0,
-            width=0,
+            width="content",
+            unsafe_allow_javascript=True,
         )
         st.session_state["sidebar_auto_opened"] = True
 
@@ -6342,6 +7136,9 @@ def render_app():
                 st.session_state.get("active_sql_query"),
                 st.session_state.get("sql_connection_mode", "Bundled SQL Example"),
             )
+            override_store = st.session_state.get("policy_overrides_by_source", {})
+            source_overrides = override_store.get(data_source_label) if isinstance(override_store, dict) else None
+            normalized_df = apply_policy_overrides(normalized_df, source_overrides)
             base_analytics = build_analytics(normalized_df)
             if data_source == "SQL Database" and st.session_state.get("active_sql_query"):
                 st.session_state["sql_mode_message"] = None
@@ -6360,6 +7157,8 @@ def render_app():
 
     previous_data_source_label = st.session_state.get("active_data_source_label")
     if previous_data_source_label != data_source_label:
+        if uploaded_file is not None or st.session_state.get("active_sql_query"):
+            st.session_state["jump_to_executive_dashboard"] = True
         st.session_state["active_data_source_label"] = data_source_label
         st.session_state["applied_scenario"] = None
         st.session_state["scenario_builder"] = {}
@@ -6448,6 +7247,10 @@ def render_app():
             f"{applied_scenario_metrics['mitigation_supplier_count']} mitigation suppliers, "
             f"{applied_scenario_metrics['covered_spend_share']:.0%} covered spend."
         )
+        st.caption(
+            "Applied portfolio spend reflects the component demand that still needs to be served after the scenario is applied. "
+            "It can remain close to the base-case spend because the app redistributes covered demand across the retained scenario structure rather than assuming removed supplier spend disappears from total demand."
+        )
         base_supplier_count = int(base_analytics["supplier_summary"]["supplier"].nunique()) if not base_analytics["supplier_summary"].empty else 0
         base_high_risk_count = int(base_analytics["component_summary"]["high_risk_flag"].sum()) if not base_analytics["component_summary"].empty and "high_risk_flag" in base_analytics["component_summary"].columns else 0
         applied_high_risk_count = int(analytics["component_summary"]["high_risk_flag"].sum()) if not analytics["component_summary"].empty and "high_risk_flag" in analytics["component_summary"].columns else 0
@@ -6493,7 +7296,7 @@ def render_app():
         ]
     )
     if st.session_state.pop("jump_to_executive_dashboard", False):
-        components.html(
+        st.html(
             """
             <script>
             const openExecutiveTab = () => {
@@ -6506,8 +7309,8 @@ def render_app():
             setTimeout(openExecutiveTab, 150);
             </script>
             """,
-            height=0,
-            width=0,
+            width="content",
+            unsafe_allow_javascript=True,
         )
 
     with tabs[0]:
@@ -6524,6 +7327,7 @@ def render_app():
             negotiation_plan=applied_negotiation_plan if scenario_applied else None,
             base_analytics=base_analytics if scenario_applied else None,
             applied_scenario_metrics=applied_scenario_metrics if scenario_applied else None,
+            optimization_objective=st.session_state.get("scenario_optimization_objective", "Balanced"),
         )
 
     with tabs[2]:
@@ -6536,6 +7340,78 @@ def render_app():
                 for note in input_diagnostics:
                     st.write(f"- {note}")
             show_table(input_field_status)
+        supplier_constraint_summary, component_constraint_summary = build_policy_constraint_summary(normalized_df)
+        with st.expander("Policy / Constraint Inputs"):
+            render_narrative_text(
+                "This section shows which supplier- and component-level policy flags were detected from the active dataset. These flags drive the constraint-aware decision and scenario behavior when present."
+            )
+            if supplier_constraint_summary.empty and component_constraint_summary.empty:
+                st.caption("No policy or constraint flags were detected in the current dataset.")
+            else:
+                if not supplier_constraint_summary.empty:
+                    st.markdown("**Supplier Flags**")
+                    show_table(supplier_constraint_summary)
+                if not component_constraint_summary.empty:
+                    st.markdown("**Component Flags**")
+                    show_table(component_constraint_summary)
+        with st.expander("Policy Overrides (Editable)"):
+            render_narrative_text(
+                "Use these checkboxes when the source data does not yet contain the policy or constraint flags you need. Changes apply only to the current loaded source in this app session."
+            )
+            policy_message = st.session_state.pop(f"policy_override_message::{data_source_label}", None)
+            if isinstance(policy_message, tuple) and len(policy_message) == 2:
+                message_type, message_text = policy_message
+                if message_type == "success":
+                    st.success(message_text)
+                elif message_type == "info":
+                    st.info(message_text)
+            override_store = st.session_state.get("policy_overrides_by_source", {})
+            saved_policy_overrides = override_store.get(data_source_label) if isinstance(override_store, dict) else None
+            policy_editor_frame = hydrate_policy_override_editor_frame(normalized_df, saved_policy_overrides)
+            with st.form(key=f"policy_override_form::{data_source_label}", clear_on_submit=False):
+                edited_policy_frame = st.data_editor(
+                    policy_editor_frame,
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "override_scope_id": st.column_config.NumberColumn("Row", disabled=True, width="small"),
+                        "supplier": st.column_config.TextColumn("Supplier", disabled=True, width="medium"),
+                        "component": st.column_config.TextColumn("Component", disabled=True, width="medium"),
+                        **{
+                            col: st.column_config.CheckboxColumn(POLICY_FLAG_LABELS[col], help=f"Override `{col}` for this row.")
+                            for col in POLICY_FLAG_COLUMNS
+                        },
+                    },
+                    disabled=["override_scope_id", "supplier", "component"],
+                    key=f"policy_override_editor::{data_source_label}",
+                )
+                policy_submit_columns = st.columns([1, 1, 4])
+                with policy_submit_columns[0]:
+                    apply_policy_changes = st.form_submit_button("Apply Policy Changes", type="primary", width="stretch")
+                with policy_submit_columns[1]:
+                    reset_policy_changes = st.form_submit_button("Reset Policy Changes", width="stretch")
+            edited_policy_frame = pd.DataFrame(edited_policy_frame)
+            if apply_policy_changes and not edited_policy_frame.empty:
+                save_policy_override_frame(data_source_label, edited_policy_frame)
+                st.session_state[f"policy_override_message::{data_source_label}"] = (
+                    "success",
+                    "Policy overrides applied to the current source.",
+                )
+                st.rerun()
+            if reset_policy_changes:
+                override_store = st.session_state.get("policy_overrides_by_source", {})
+                if isinstance(override_store, dict) and data_source_label in override_store:
+                    override_store = dict(override_store)
+                    override_store.pop(data_source_label, None)
+                    st.session_state["policy_overrides_by_source"] = override_store
+                editor_state_key = f"policy_override_editor::{data_source_label}"
+                if editor_state_key in st.session_state:
+                    del st.session_state[editor_state_key]
+                st.session_state[f"policy_override_message::{data_source_label}"] = (
+                    "info",
+                    "Policy overrides reset to the source data values.",
+                )
+                st.rerun()
         with st.expander("Normalized Input Preview"):
             show_table(build_normalized_input_preview(normalized_df, input_diagnostics))
         render_glossary_drawer()
@@ -6742,12 +7618,15 @@ def render_app():
                 "rationale": pending_recommendation.get("rationale", ""),
                 "tested_scenarios": int(pending_recommendation.get("tested_scenarios", 0)),
                 "score": float(pending_recommendation.get("score", 0.0)),
-                "optimization_objective": str(pending_recommendation.get("optimization_objective", "Best Overall")),
+                "optimization_objective": str(pending_recommendation.get("optimization_objective", "Balanced")),
                 "covered_spend_share": float(pending_recommendation.get("covered_spend_share", 0.0)),
                 "estimated_savings": float(pending_recommendation.get("estimated_savings", 0.0)),
                 "net_savings": float(pending_recommendation.get("net_savings", pending_recommendation.get("estimated_savings", 0.0))),
                 "high_risk_components": int(pending_recommendation.get("high_risk_components", 0)),
                 "uncovered_components": int(pending_recommendation.get("uncovered_components", 0)),
+                "selected_supplier_spend": float(pending_recommendation.get("selected_supplier_spend", 0.0)),
+                "target_total_supplier_spend": float(pending_recommendation.get("target_total_supplier_spend", 0.0)),
+                "scenario_posture": pending_recommendation.get("scenario_posture", {}),
                 "score_breakdown": pending_recommendation.get("score_breakdown", pd.DataFrame()),
             }
             save_persisted_scenario_state(
@@ -6882,10 +7761,243 @@ def render_app():
         st.markdown(workflow_html, unsafe_allow_html=True)
         optimization_objective = st.selectbox(
             "Optimization objective",
-            options=["Best Overall", "Best Net Savings", "Best Risk Reduction"],
+            options=SCENARIO_OBJECTIVE_OPTIONS,
             key="scenario_optimization_objective",
-            help="Choose how strongly the recommendation engine should emphasize balanced performance, net savings, or risk reduction.",
+            help="Choose whether the recommendation engine emphasizes balance, risk reduction, net savings, spend leverage, total selected-supplier spend, or a more policy-aware review.",
         )
+        constrained_supplier_names = (
+            scenario_supplier_summary.loc[
+                scenario_supplier_summary["supplier_protected"]
+                | scenario_supplier_summary["contract_locked"]
+                | scenario_supplier_summary["do_not_eliminate"],
+                "supplier",
+            ]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+        constrained_component_names = (
+            scenario_component_summary.loc[
+                scenario_component_summary["component_single_source_required"]
+                | scenario_component_summary["engineering_locked"]
+                | scenario_component_summary["regulatory_locked"],
+                "component",
+            ]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+        accepted_risk_supplier_names = (
+            scenario_supplier_summary.loc[scenario_supplier_summary["risk_accepted"], "supplier"]
+            .dropna()
+            .astype(str)
+            .tolist()
+        )
+        scenario_total_base_spend = float(scenario_supplier_summary["spend"].sum()) if not scenario_supplier_summary.empty else 0.0
+        spend_focus_step = max(1000.0, round(scenario_total_base_spend / 20.0, -3)) if scenario_total_base_spend > 0 else 1000.0
+        for control_key, default_value in [
+            ("scenario_ignore_suppliers_below", 0.0),
+            ("scenario_target_total_supplier_spend", scenario_total_base_spend),
+            ("scenario_focus_on_suppliers_at_or_above", 0.0),
+        ]:
+            if control_key not in st.session_state:
+                st.session_state[control_key] = float(default_value)
+            st.session_state[control_key] = _clamp_scenario_spend_value(
+                st.session_state.get(control_key, default_value),
+                max_value=scenario_total_base_spend,
+            )
+            slider_key = f"{control_key}__slider"
+            input_key = f"{control_key}__input"
+            if slider_key not in st.session_state:
+                st.session_state[slider_key] = st.session_state[control_key]
+            if input_key not in st.session_state:
+                st.session_state[input_key] = st.session_state[control_key]
+            st.session_state[slider_key] = _clamp_scenario_spend_value(
+                st.session_state.get(slider_key, st.session_state[control_key]),
+                max_value=scenario_total_base_spend,
+            )
+            st.session_state[input_key] = _clamp_scenario_spend_value(
+                st.session_state.get(input_key, st.session_state[control_key]),
+                max_value=scenario_total_base_spend,
+            )
+        scenario_control_left, scenario_control_right = st.columns(2)
+        with scenario_control_left:
+            respect_constraints = st.checkbox(
+                "Respect Constraints",
+                value=True,
+                key="scenario_respect_constraints",
+                help="Protect constrained and locked suppliers from being treated like pure optimization candidates.",
+            )
+            if constrained_supplier_names or constrained_component_names:
+                constraint_summary_parts = []
+                if constrained_supplier_names:
+                    constraint_summary_parts.append(
+                        "Suppliers: " + format_name_list(constrained_supplier_names, max_items=5)
+                    )
+                if constrained_component_names:
+                    constraint_summary_parts.append(
+                        "Components: " + format_name_list(constrained_component_names, max_items=5)
+                    )
+                st.caption("Current constraints in scope: " + " | ".join(constraint_summary_parts))
+            else:
+                st.caption("Current constraints in scope: none detected in the active dataset.")
+            ignore_suppliers_below = st.slider(
+                "Ignore Suppliers Below",
+                min_value=0.0,
+                max_value=float(scenario_total_base_spend),
+                value=float(st.session_state.get("scenario_ignore_suppliers_below", 0.0)),
+                step=float(spend_focus_step),
+                key="scenario_ignore_suppliers_below__slider",
+                on_change=sync_scenario_spend_control_from_slider,
+                args=("scenario_ignore_suppliers_below", scenario_total_base_spend),
+                help="Ignore very small suppliers below this spend amount when generating a recommended scenario.",
+                format="$%.0f",
+            )
+            ignore_suppliers_below = st.number_input(
+                "Ignore Suppliers Below Exact Amount",
+                min_value=0.0,
+                max_value=float(scenario_total_base_spend),
+                value=float(st.session_state.get("scenario_ignore_suppliers_below", 0.0)),
+                step=float(spend_focus_step),
+                key="scenario_ignore_suppliers_below__input",
+                on_change=sync_scenario_spend_control_from_input,
+                args=("scenario_ignore_suppliers_below", scenario_total_base_spend),
+                format="%.0f",
+                help="Type an exact spend floor if the slider is too coarse.",
+            )
+            ignore_suppliers_below = float(st.session_state.get("scenario_ignore_suppliers_below", 0.0))
+            accept_single_source_exposure = st.checkbox(
+                "Accept Single-Source Exposure",
+                value=False,
+                key="scenario_accept_single_source_exposure",
+                help="Allow the recommendation to leave single-source exposure in place instead of trying hard to reduce it.",
+            )
+            if scenario_single_source_names:
+                st.caption(
+                    "Current single-source exposure: "
+                    + format_name_list(scenario_single_source_names, max_items=6)
+                )
+            else:
+                st.caption("Current single-source exposure: none detected in the active dataset.")
+            target_total_supplier_spend = st.slider(
+                "Target Total Supplier Spend",
+                min_value=0.0,
+                max_value=float(scenario_total_base_spend),
+                value=float(st.session_state.get("scenario_target_total_supplier_spend", scenario_total_base_spend)),
+                step=float(spend_focus_step),
+                key="scenario_target_total_supplier_spend__slider",
+                on_change=sync_scenario_spend_control_from_slider,
+                args=("scenario_target_total_supplier_spend", scenario_total_base_spend),
+                help="Steer the recommendation toward a selected supplier set whose combined spend is close to this amount, while still keeping required constrained suppliers in scope.",
+                format="$%.0f",
+            )
+            target_total_supplier_spend = st.number_input(
+                "Target Total Supplier Spend Exact Amount",
+                min_value=0.0,
+                max_value=float(scenario_total_base_spend),
+                value=float(st.session_state.get("scenario_target_total_supplier_spend", scenario_total_base_spend)),
+                step=float(spend_focus_step),
+                key="scenario_target_total_supplier_spend__input",
+                on_change=sync_scenario_spend_control_from_input,
+                args=("scenario_target_total_supplier_spend", scenario_total_base_spend),
+                format="%.0f",
+                help="Type an exact total-spend target if the slider is too coarse.",
+            )
+            target_total_supplier_spend = float(st.session_state.get("scenario_target_total_supplier_spend", scenario_total_base_spend))
+            if scenario_total_base_spend > 0:
+                st.caption(
+                    f"Current total-spend target for selected suppliers: {format_currency_compact(target_total_supplier_spend)} out of {format_currency_compact(scenario_total_base_spend)} base spend."
+                )
+            if optimization_objective == "Total Spend":
+                st.caption("Total Spend objective: the recommendation keeps going toward the spend target while still calling out protected, locked, and accepted-risk suppliers that stay in scope.")
+            favor_fewer_suppliers = st.checkbox(
+                "Favor Fewer Suppliers",
+                value=False,
+                key="scenario_favor_fewer_suppliers",
+                help="Push the recommendation harder toward consolidation and a smaller retained supplier set.",
+            )
+        with scenario_control_right:
+            include_accepted_risk = st.checkbox(
+                "Include Accepted Risk",
+                value=True,
+                key="scenario_include_accepted_risk",
+                help="Preserve suppliers marked as accepted risk when generating a recommended scenario.",
+            )
+            if accepted_risk_supplier_names:
+                st.caption(
+                    "Current accepted-risk suppliers: "
+                    + format_name_list(accepted_risk_supplier_names, max_items=6)
+                )
+            else:
+                st.caption("Current accepted-risk suppliers: none detected in the active dataset.")
+            focus_on_suppliers_at_or_above = st.slider(
+                "Focus On Suppliers At Or Above",
+                min_value=0.0,
+                max_value=float(scenario_total_base_spend),
+                value=float(st.session_state.get("scenario_focus_on_suppliers_at_or_above", 0.0)),
+                step=float(spend_focus_step),
+                key="scenario_focus_on_suppliers_at_or_above__slider",
+                on_change=sync_scenario_spend_control_from_slider,
+                args=("scenario_focus_on_suppliers_at_or_above", scenario_total_base_spend),
+                help="Focus the recommendation engine on suppliers whose individual spend is at or above this amount in the current base dataset.",
+                format="$%.0f",
+            )
+            focus_on_suppliers_at_or_above = st.number_input(
+                "Focus On Suppliers At Or Above Exact Amount",
+                min_value=0.0,
+                max_value=float(scenario_total_base_spend),
+                value=float(st.session_state.get("scenario_focus_on_suppliers_at_or_above", 0.0)),
+                step=float(spend_focus_step),
+                key="scenario_focus_on_suppliers_at_or_above__input",
+                on_change=sync_scenario_spend_control_from_input,
+                args=("scenario_focus_on_suppliers_at_or_above", scenario_total_base_spend),
+                format="%.0f",
+                help="Type an exact supplier-level spend threshold if the slider is too coarse.",
+            )
+            focus_on_suppliers_at_or_above = float(st.session_state.get("scenario_focus_on_suppliers_at_or_above", 0.0))
+            if focus_on_suppliers_at_or_above > 0:
+                st.caption(
+                    f"Current supplier-level spend focus: {format_currency_compact(focus_on_suppliers_at_or_above)} and above."
+                )
+            else:
+                st.caption("Current supplier-level spend focus: using the full supplier base.")
+            accept_high_risk_exposure = st.checkbox(
+                "Accept High-Risk Exposure",
+                value=False,
+                key="scenario_accept_high_risk_exposure",
+                help="Allow the recommendation to tolerate more high-risk components when other priorities matter more.",
+            )
+            if scenario_high_risk_names:
+                st.caption(
+                    "Current high-risk components: "
+                    + format_name_list(scenario_high_risk_names, max_items=6)
+                )
+            else:
+                st.caption("Current high-risk components: none detected in the active dataset.")
+            require_full_component_coverage = st.checkbox(
+                "Require Full Component Coverage",
+                value=True,
+                key="scenario_require_full_component_coverage",
+                help="Prevent the recommended scenario from leaving any component uncovered.",
+            )
+            allow_mitigation_suppliers = st.checkbox(
+                "Allow Mitigation Suppliers",
+                value=True,
+                key="scenario_allow_mitigation_suppliers",
+                help="Allow the recommendation engine to add mitigation suppliers outside the selected retained set.",
+            )
+            honor_spend_target_strictly = st.checkbox(
+                "Honor Spend Target Strictly",
+                value=False,
+                key="scenario_honor_spend_target_strictly",
+                help="Weight the total-spend target more heavily even when it creates tougher coverage or risk tradeoffs.",
+            )
+            do_not_exceed_spend_target = st.checkbox(
+                "Do Not Exceed Spend Target",
+                value=False,
+                key="scenario_do_not_exceed_spend_target",
+                help="Treat the target total supplier spend as a hard maximum and discard scenarios that go above it.",
+            )
         evaluated_builder = (
             st.session_state.get("scenario_builder", {})
             if st.session_state.get("scenario_builder_source_label") == data_source_label
@@ -6896,8 +8008,23 @@ def render_app():
             st.caption("Choose the optimization objective, then let the model produce a starting supplier and mitigation structure.")
             recommend_col, spacer_col = st.columns([1, 3])
             with recommend_col:
-                if st.button("Recommend Best Scenario", type="secondary", use_container_width=True):
-                    recommendation = recommend_best_supplier_scenario(base_analytics, optimization_objective=optimization_objective)
+                if st.button("Recommend Best Scenario", type="secondary", width="stretch"):
+                    recommendation = recommend_best_supplier_scenario(
+                        base_analytics,
+                        optimization_objective=optimization_objective,
+                        respect_constraints=respect_constraints,
+                        include_accepted_risk=include_accepted_risk,
+                        ignore_suppliers_below=ignore_suppliers_below,
+                        focus_on_suppliers_at_or_above=focus_on_suppliers_at_or_above,
+                        target_total_supplier_spend=target_total_supplier_spend,
+                        accept_single_source_exposure=accept_single_source_exposure,
+                        accept_high_risk_exposure=accept_high_risk_exposure,
+                        require_full_component_coverage=require_full_component_coverage,
+                        favor_fewer_suppliers=favor_fewer_suppliers,
+                        allow_mitigation_suppliers=allow_mitigation_suppliers,
+                        honor_spend_target_strictly=honor_spend_target_strictly,
+                        do_not_exceed_spend_target=do_not_exceed_spend_target,
+                    )
                     st.session_state["pending_scenario_recommendation"] = {
                         "data_source_label": data_source_label,
                         "selected_suppliers": list(recommendation.get("selected_suppliers", ())),
@@ -6911,6 +8038,19 @@ def render_app():
                         "net_savings": float(recommendation.get("metrics", {}).get("net_savings", 0.0)),
                         "high_risk_components": int(recommendation.get("scorecard", {}).get("high_risk_components", 0)),
                         "uncovered_components": int(recommendation.get("metrics", {}).get("uncovered_components", 0)),
+                        "selected_supplier_spend": float(recommendation.get("scorecard", {}).get("selected_supplier_spend", 0.0)),
+                        "target_total_supplier_spend": float(recommendation.get("scorecard", {}).get("target_total_supplier_spend", 0.0)),
+                        "scenario_posture": {
+                            "respect_constraints": bool(respect_constraints),
+                            "include_accepted_risk": bool(include_accepted_risk),
+                            "accept_single_source_exposure": bool(accept_single_source_exposure),
+                            "accept_high_risk_exposure": bool(accept_high_risk_exposure),
+                            "require_full_component_coverage": bool(require_full_component_coverage),
+                            "favor_fewer_suppliers": bool(favor_fewer_suppliers),
+                            "allow_mitigation_suppliers": bool(allow_mitigation_suppliers),
+                            "honor_spend_target_strictly": bool(honor_spend_target_strictly),
+                            "do_not_exceed_spend_target": bool(do_not_exceed_spend_target),
+                        },
                         "score_breakdown": recommendation.get("scorecard", {}).get("breakdown", pd.DataFrame()),
                     }
                     st.rerun()
@@ -6933,7 +8073,8 @@ def render_app():
             render_narrative_text(
                 f"{recommendation_state.get('optimization_objective', optimization_objective)} recommendation: score {recommendation_state.get('score', 0.0):,.1f}, {len(recommended_supplier_list)} suppliers, "
                 f"{recommendation_state.get('covered_spend_share', 0.0):.0%} spend coverage, "
-                f"{recommendation_state.get('high_risk_components', 0)} high-risk components, {recommendation_state.get('uncovered_components', 0)} uncovered components, "
+                f"{recommendation_state.get('uncovered_components', 0)} uncovered components, "
+                f"{recommendation_state.get('high_risk_components', 0)} remaining high-risk components, "
                 f"and ${recommendation_state.get('net_savings', recommendation_state.get('estimated_savings', 0.0)):,.0f} net savings."
             )
             render_narrative_text(
@@ -6947,6 +8088,300 @@ def render_app():
                 f"Scenario engine reviewed {recommendation_state.get('tested_scenarios', 0)} candidate combinations across supplier counts. "
                 + str(recommendation_state.get("rationale", ""))
             )
+            recommendation_posture = recommendation_state.get("scenario_posture", {})
+            if isinstance(recommendation_posture, dict) and recommendation_posture:
+                enabled_posture_labels = []
+                posture_label_map = {
+                    "respect_constraints": "Respect Constraints",
+                    "include_accepted_risk": "Include Accepted Risk",
+                    "accept_single_source_exposure": "Accept Single-Source Exposure",
+                    "accept_high_risk_exposure": "Accept High-Risk Exposure",
+                    "require_full_component_coverage": "Require Full Component Coverage",
+                    "favor_fewer_suppliers": "Favor Fewer Suppliers",
+                    "allow_mitigation_suppliers": "Allow Mitigation Suppliers",
+                    "honor_spend_target_strictly": "Honor Spend Target Strictly",
+                    "do_not_exceed_spend_target": "Do Not Exceed Spend Target",
+                }
+                for posture_key, posture_label in posture_label_map.items():
+                    if recommendation_posture.get(posture_key):
+                        enabled_posture_labels.append(posture_label)
+                if enabled_posture_labels:
+                    st.caption("Scenario posture used: " + ", ".join(enabled_posture_labels))
+            if recommendation_state.get("optimization_objective", optimization_objective) == "Total Spend":
+                selected_supplier_set = set(str(name) for name in recommended_supplier_list)
+                selected_supplier_frame = scenario_supplier_summary.loc[
+                    scenario_supplier_summary["supplier"].astype(str).isin(selected_supplier_set)
+                ].copy()
+                selected_supplier_spend = float(recommendation_state.get("selected_supplier_spend", 0.0))
+                target_total_supplier_spend_value = float(recommendation_state.get("target_total_supplier_spend", 0.0))
+                constrained_selected_suppliers = (
+                    selected_supplier_frame.loc[
+                        selected_supplier_frame["supplier_protected"]
+                        | selected_supplier_frame["contract_locked"]
+                        | selected_supplier_frame["do_not_eliminate"],
+                        "supplier",
+                    ]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+                accepted_risk_selected_suppliers = (
+                    selected_supplier_frame.loc[selected_supplier_frame["risk_accepted"], "supplier"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+                single_source_selected_components = (
+                    scenario_component_supplier_detail.loc[
+                        scenario_component_supplier_detail["supplier"].astype(str).isin(selected_supplier_set)
+                        & (
+                            scenario_component_supplier_detail["single_source_flag"]
+                            | scenario_component_supplier_detail["component_single_source_required"]
+                            | scenario_component_supplier_detail["engineering_locked"]
+                            | scenario_component_supplier_detail["regulatory_locked"]
+                        ),
+                        "component",
+                    ]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                )
+                gap_direction = "above" if selected_supplier_spend >= target_total_supplier_spend_value else "below"
+                gap_amount = abs(selected_supplier_spend - target_total_supplier_spend_value)
+                current_metrics, current_scenario_df, _ = build_consolidation_scenario(
+                    base_analytics,
+                    tuple(sorted(recommended_supplier_list)),
+                    tuple(sorted(recommended_mitigation_list)),
+                )
+                remaining_single_source_count = int(current_metrics.get("single_source_components", 0))
+                remaining_uncovered_count = int(current_metrics.get("uncovered_components", 0))
+                remaining_high_risk_count = int(current_scenario_df["Scenario Risk Level"].eq("High").sum()) if not current_scenario_df.empty else 0
+                mitigation_supplier_count = int(current_metrics.get("mitigation_supplier_count", 0))
+                remaining_single_source_components = (
+                    current_scenario_df.loc[current_scenario_df.get("Effective Supplier Count", pd.Series(dtype=float)).eq(1), "Component"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                    if not current_scenario_df.empty and "Component" in current_scenario_df.columns
+                    else []
+                )
+                remaining_high_risk_components = (
+                    current_scenario_df.loc[current_scenario_df["Scenario Risk Level"].eq("High"), "Component"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                    if not current_scenario_df.empty and {"Scenario Risk Level", "Component"}.issubset(current_scenario_df.columns)
+                    else []
+                )
+                remaining_uncovered_components = (
+                    current_scenario_df.loc[current_scenario_df.get("Scenario Status", pd.Series(dtype=str)).eq("Not Covered"), "Component"]
+                    .dropna()
+                    .astype(str)
+                    .unique()
+                    .tolist()
+                    if not current_scenario_df.empty and {"Scenario Status", "Component"}.issubset(current_scenario_df.columns)
+                    else []
+                )
+                render_narrative_text(
+                    "Uncovered Components: "
+                    + (", ".join(remaining_uncovered_components) if remaining_uncovered_components else "none")
+                    + ". Remaining High-Risk Components: "
+                    + (
+                        format_component_supplier_issue_list(
+                            scenario_component_summary,
+                            scenario_component_summary["component"].astype(str).isin(remaining_high_risk_components),
+                            max_items=8,
+                        )
+                        if remaining_high_risk_components
+                        else "none"
+                    )
+                    + ". Remaining Single-Source Components: "
+                    + (
+                        format_component_supplier_issue_list(
+                            scenario_component_summary,
+                            scenario_component_summary["component"].astype(str).isin(remaining_single_source_components),
+                            max_items=8,
+                        )
+                        if remaining_single_source_components
+                        else "none"
+                    )
+                    + "."
+                )
+                posture_state = recommendation_state.get("scenario_posture", {})
+                if gap_amount <= max(target_total_supplier_spend_value * 0.03, 10000.0) and remaining_uncovered_count == 0:
+                    verdict_prefix = "This target appears operationally feasible."
+                elif remaining_uncovered_count > 0:
+                    verdict_prefix = "This target is only reachable if the business accepts uncovered demand."
+                elif gap_direction == "above":
+                    verdict_prefix = "This target is not being reached under the current scenario posture."
+                else:
+                    verdict_prefix = "This target is reachable, but the tradeoffs remain material."
+                verdict_lines = [
+                    verdict_prefix,
+                    f"The recommended supplier set lands at {format_currency_compact(selected_supplier_spend)} against a target of {format_currency_compact(target_total_supplier_spend_value)}, which is {format_currency_compact(gap_amount)} {gap_direction} target."
+                ]
+                if gap_direction == "above":
+                    if constrained_selected_suppliers:
+                        verdict_lines.append(
+                            "Protected or locked suppliers are still consuming spend in the target structure: "
+                            + format_name_list(constrained_selected_suppliers, max_items=6)
+                            + "."
+                        )
+                    if accepted_risk_selected_suppliers:
+                        verdict_lines.append(
+                            "Accepted-risk suppliers remain in the recommended set: "
+                            + format_name_list(accepted_risk_selected_suppliers, max_items=6)
+                            + "."
+                        )
+                    if single_source_selected_components:
+                        verdict_lines.append(
+                            "Single-source or locked components are still forcing supplier retention on "
+                            + format_name_list(single_source_selected_components, max_items=6)
+                            + "."
+                        )
+                    if posture_state.get("do_not_exceed_spend_target"):
+                        verdict_lines.append(
+                            "Because `Do Not Exceed Spend Target` is active, any scenario above the target is discarded, so failing to return a lower-spend option means the current commercial and coverage structure is likely infeasible at that ceiling."
+                        )
+                else:
+                    verdict_lines.append(
+                        "The model can stay at or below the target, so the next question is whether the remaining exposure is acceptable to the business."
+                    )
+                if remaining_single_source_count > 0:
+                    verdict_lines.append(
+                        f"Remaining single-source exposure: {remaining_single_source_count} component{'s' if remaining_single_source_count != 1 else ''} still rely on one effective supplier, which means disruption on those items would still have limited fallback."
+                    )
+                    if remaining_single_source_components:
+                        verdict_lines.append(
+                            "The remaining single-source components are "
+                            + format_name_list(remaining_single_source_components, max_items=8)
+                            + "."
+                        )
+                if remaining_high_risk_count > 0:
+                    verdict_lines.append(
+                        f"Remaining high-risk exposure: {remaining_high_risk_count} component{'s' if remaining_high_risk_count != 1 else ''} are still classified as high risk, so the spend target is being pursued with meaningful service, continuity, or quality exposure still on the table."
+                    )
+                    if remaining_high_risk_components:
+                        verdict_lines.append(
+                            "The remaining high-risk components are "
+                            + format_name_list(remaining_high_risk_components, max_items=8)
+                            + "."
+                        )
+                if remaining_uncovered_count > 0:
+                    verdict_lines.append(
+                        f"Uncovered components remaining: {remaining_uncovered_count} component{'s' if remaining_uncovered_count != 1 else ''} are not covered at all, which is the clearest sign that the spend target is pushing beyond a normal operating posture."
+                    )
+                    if remaining_uncovered_components:
+                        verdict_lines.append(
+                            "The uncovered components are "
+                            + format_name_list(remaining_uncovered_components, max_items=8)
+                            + "."
+                        )
+                elif mitigation_supplier_count == 0 and not posture_state.get("allow_mitigation_suppliers", True):
+                    verdict_lines.append(
+                        "No mitigation suppliers were allowed, so the recommendation had to absorb more concentration and risk inside the retained supplier set instead of offsetting the spend target with backup coverage."
+                    )
+                elif mitigation_supplier_count > 0:
+                    verdict_lines.append(
+                        f"The scenario relies on {mitigation_supplier_count} mitigation supplier{'s' if mitigation_supplier_count != 1 else ''}, which means part of the spend target is being supported by contingency moves rather than a clean retained-state simplification."
+                    )
+                if posture_state.get("accept_single_source_exposure"):
+                    verdict_lines.append(
+                        "`Accept Single-Source Exposure` is on, so the engine was allowed to leave concentration in place instead of treating it as a reason to keep more suppliers."
+                    )
+                if posture_state.get("accept_high_risk_exposure"):
+                    verdict_lines.append(
+                        "`Accept High-Risk Exposure` is on, so the engine was explicitly allowed to carry more risk in order to chase the spend target."
+                    )
+                if posture_state.get("honor_spend_target_strictly"):
+                    verdict_lines.append(
+                        "`Honor Spend Target Strictly` is on, so the recommendation is intentionally leaning harder toward the spend goal even when that worsens the residual risk picture."
+                    )
+                with st.expander("Spend Target Feasibility Verdict", expanded=True):
+                    render_narrative_text(" ".join(verdict_lines))
+                gap_driver_lines = [
+                    f"Selected supplier spend is {format_currency_compact(selected_supplier_spend)} versus a target of {format_currency_compact(target_total_supplier_spend_value)}, which is {format_currency_compact(gap_amount)} {gap_direction} target."
+                ]
+                if constrained_selected_suppliers:
+                    gap_driver_lines.append(
+                        "Protected or locked suppliers still in scope: "
+                        + format_name_list(constrained_selected_suppliers, max_items=6)
+                        + "."
+                    )
+                if accepted_risk_selected_suppliers:
+                    gap_driver_lines.append(
+                        "Accepted-risk suppliers still in scope: "
+                        + format_name_list(accepted_risk_selected_suppliers, max_items=6)
+                        + "."
+                    )
+                if single_source_selected_components:
+                    gap_driver_lines.append(
+                        "Single-source or locked component coverage affecting the target: "
+                        + format_name_list(single_source_selected_components, max_items=6)
+                        + "."
+                    )
+                if len(gap_driver_lines) == 1:
+                    gap_driver_lines.append(
+                        "No explicit protected, accepted-risk, or single-source driver was detected in the selected set, so the gap is likely coming from general coverage, risk, or mitigation tradeoffs."
+                    )
+                with st.expander("Spend Target Gap Drivers", expanded=True):
+                    render_narrative_text(" ".join(gap_driver_lines))
+                accepted_issue_lines = [
+                    "Remaining single-source components in the scenario: "
+                    + str(int(current_metrics.get("single_source_components", 0)))
+                    + (
+                        " ("
+                        + ", ".join(remaining_single_source_components)
+                        + ")"
+                        if remaining_single_source_components
+                        else ""
+                    )
+                    + ".",
+                    "Remaining high-risk components in the scenario: "
+                    + str(int(current_scenario_df["Scenario Risk Level"].eq("High").sum()) if not current_scenario_df.empty else 0)
+                    + (
+                        " ("
+                        + ", ".join(remaining_high_risk_components)
+                        + ")"
+                        if remaining_high_risk_components
+                        else ""
+                    )
+                    + ".",
+                    "Uncovered components in the scenario: "
+                    + str(int(current_metrics.get("uncovered_components", 0)))
+                    + (
+                        " ("
+                        + ", ".join(remaining_uncovered_components)
+                        + ")"
+                        if remaining_uncovered_components
+                        else ""
+                    )
+                    + ".",
+                    f"Mitigation suppliers added: {int(current_metrics.get('mitigation_supplier_count', 0))}.",
+                ]
+                if constrained_selected_suppliers:
+                    accepted_issue_lines.append(
+                        "Protected or locked suppliers retained: "
+                        + format_name_list(constrained_selected_suppliers, max_items=6)
+                        + "."
+                    )
+                if accepted_risk_selected_suppliers:
+                    accepted_issue_lines.append(
+                        "Accepted-risk suppliers retained: "
+                        + format_name_list(accepted_risk_selected_suppliers, max_items=6)
+                        + "."
+                    )
+                if not recommendation_state.get("scenario_posture", {}).get("allow_mitigation_suppliers", True):
+                    accepted_issue_lines.append(
+                        "Mitigation suppliers were not allowed, so the scenario may leave more risk or coverage issues in place to pursue the spend target."
+                    )
+                with st.expander("Issues Accepted To Reach Target", expanded=True):
+                    render_narrative_text(" ".join(accepted_issue_lines))
             recommendation_breakdown = recommendation_state.get("score_breakdown", pd.DataFrame())
             if isinstance(recommendation_breakdown, pd.DataFrame) and not recommendation_breakdown.empty:
                 with st.expander("Recommended Scenario Score Breakdown"):
@@ -7114,7 +8549,7 @@ def render_app():
                     for supplier_name in pickup_choices:
                         mitigation_assignments.append(f"{component_name}|||{supplier_name}")
                 st.caption("When the draft looks right, evaluate it to refresh the scenario metrics and impact view below.")
-                evaluate_submitted = st.form_submit_button("Evaluate Selected Scenario", type="secondary", use_container_width=True)
+                evaluate_submitted = st.form_submit_button("Evaluate Selected Scenario", type="secondary", width="stretch")
         draft_scenario_builder = {
             "selected_suppliers": list(selected_suppliers),
             "mitigation_assignments": sorted(mitigation_assignments),
@@ -7182,7 +8617,7 @@ def render_app():
             st.caption("After evaluation, either reset the exercise or apply the evaluated scenario to the dashboard.")
             action_left, action_right = st.columns(2)
             with action_left:
-                if st.button("Reset To Original Scenario", type="secondary", use_container_width=True):
+                if st.button("Reset To Original Scenario", type="secondary", width="stretch"):
                     st.session_state["pending_reset_to_original_scenario"] = True
                     st.rerun()
             with action_right:
@@ -7246,31 +8681,37 @@ def render_app():
             ].tolist() if not scenario_df.empty else []
         fixed_uncovered_count = max(0, len(base_uncovered_component_names) - len(uncovered_component_names))
         new_uncovered_count = max(0, len(uncovered_component_names) - len(base_uncovered_component_names))
+        selected_supplier_spend_metric = float(current_scorecard.get("selected_supplier_spend", 0.0))
+        target_supplier_spend_metric = float(current_scorecard.get("target_total_supplier_spend", 0.0))
+        spend_gap_metric = selected_supplier_spend_metric - target_supplier_spend_metric if target_supplier_spend_metric > 0 else 0.0
         if empty_or_unevaluated_scenario:
             st.info("No suppliers are currently selected for evaluation, so the scenario comparison below shows the base issues as still unresolved.")
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Existing Single-Source Fixed", f"{len(resolved_single_source_names)}")
-        c2.metric("Single-Sources Left", f"{len(remaining_single_source_names)}")
-        c3.metric("New Single-Sources Introduced", f"{len(new_single_source_names)}")
-        c4.metric("High-Risk Components Left", f"{scenario_high_risk_count}")
+        c1.metric("Retained Supplier Spend Footprint", format_currency_compact(selected_supplier_spend_metric))
+        c2.metric(
+            "Spend Gap vs Target",
+            (format_currency_compact(spend_gap_metric) if target_supplier_spend_metric > 0 else "Not set"),
+        )
+        c3.metric("Covered Spend %", f"{scenario_metrics['covered_spend_share']:.0%}")
+        c4.metric("Selected Suppliers", f"{scenario_metrics['selected_supplier_count']}")
 
         c5, c6, c7, c8 = st.columns(4)
-        c5.metric("Existing Uncovered Fixed", f"{fixed_uncovered_count}")
-        c6.metric("Uncovered Components Left", f"{len(uncovered_component_names)}")
-        c7.metric("Covered Spend %", f"{scenario_metrics['covered_spend_share']:.0%}")
-        c8.metric("Gross Savings", f"${scenario_metrics['estimated_savings']:,.0f}")
+        c5.metric("Uncovered Components Left", f"{len(uncovered_component_names)}")
+        c6.metric("Remaining Single-Sources", f"{len(remaining_single_source_names)}")
+        c7.metric("Remaining High-Risk Components", f"{scenario_high_risk_count}")
+        c8.metric("Mitigation Suppliers Added", f"{scenario_metrics['mitigation_supplier_count']}")
 
         c9, c10, c11, c12 = st.columns(4)
-        c9.metric("Selected Suppliers", f"{scenario_metrics['selected_supplier_count']}")
-        c10.metric("Mitigation Suppliers Added", f"{scenario_metrics['mitigation_supplier_count']}")
+        c9.metric("Existing Single-Source Fixed", f"{len(resolved_single_source_names)}")
+        c10.metric("Existing Uncovered Fixed", f"{fixed_uncovered_count}")
         c11.metric("Mitigated Single-Source", f"{scenario_metrics['mitigated_single_source_components']}")
         c12.metric("Mitigated Uncovered", f"{scenario_metrics['mitigated_uncovered_components']}")
 
         c13, c14, c15, c16 = st.columns(4)
-        c13.metric("Mitigation Cost", f"${scenario_metrics['mitigation_cost']:,.0f}")
-        c14.metric("Net Savings", f"${scenario_metrics['net_savings']:,.0f}")
-        c15.metric("Risk Reduction", f"{scenario_metrics['aggregate_risk_reduction']:.1f}")
+        c13.metric("Modeled Gross Savings", f"${scenario_metrics['estimated_savings']:,.0f}")
+        c14.metric("Modeled Net Savings", f"${scenario_metrics['net_savings']:,.0f}")
+        c15.metric("Mitigation Cost", f"${scenario_metrics['mitigation_cost']:,.0f}")
         c16.metric(
             "Avg Reduction / Mitigated",
             (
@@ -7278,6 +8719,11 @@ def render_app():
                 if scenario_metrics["mitigated_single_source_components"] > 0
                 else "0.0"
             ),
+        )
+        render_narrative_text(
+            "Use `Retained Supplier Spend Footprint` and `Spend Gap vs Target` to judge whether the scenario actually hits the spend objective for the retained supplier set. "
+            "That footprint is not the same thing as total applied portfolio spend. The applied dashboard can still show portfolio spend near the base case because covered component demand is redistributed across the retained scenario structure rather than assumed to disappear. "
+            "`Modeled Gross Savings` and `Modeled Net Savings` are comparison metrics, not literal new spend totals. They estimate relative commercial upside from the scenario structure, and are most useful for comparing one scenario against another after you are comfortable with the coverage and risk tradeoffs."
         )
         render_narrative_text(
             f"Current scenario score under {optimization_objective} is {current_scorecard.get('score', 0.0):,.1f}."
@@ -7345,7 +8791,7 @@ def render_app():
         )
         save_compare_col, clear_compare_col = st.columns(2)
         with save_compare_col:
-            if st.button("Save Current Scenario For Comparison", type="secondary", use_container_width=True):
+            if st.button("Save Current Scenario For Comparison", type="secondary", width="stretch"):
                 matching_index = next(
                     (
                         idx for idx, snapshot in enumerate(saved_snapshots)
@@ -7368,7 +8814,7 @@ def render_app():
                 }
                 st.rerun()
         with clear_compare_col:
-            if st.button("Clear Saved Comparisons", use_container_width=True):
+            if st.button("Clear Saved Comparisons", width="stretch"):
                 st.session_state["scenario_comparisons"] = {
                     **comparison_store,
                     data_source_label: [],
@@ -7385,7 +8831,7 @@ def render_app():
             for idx, snapshot in enumerate(scenario_cards):
                 with comparison_columns[idx]:
                     st.markdown(f"### {snapshot['label']}")
-                    st.caption(f"Objective: {snapshot.get('optimization_objective', 'Best Overall')}")
+                    st.caption(f"Objective: {snapshot.get('optimization_objective', 'Balanced')}")
                     st.metric("Scenario score", f"{float(snapshot['score']):,.1f}")
                     st.metric("Covered spend %", f"{float(snapshot['covered_spend_share']):.0%}")
                     st.metric("Net savings", f"${float(snapshot['net_savings']):,.0f}")
@@ -7610,7 +9056,7 @@ def render_app():
                 data=bundle,
                 file_name="supplier_analysis_bundle.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width="stretch",
             )
         with export_col2:
             if powerpoint_bytes is not None:
@@ -7619,7 +9065,7 @@ def render_app():
                     data=powerpoint_bytes,
                     file_name="supplier_analysis_executive_pack.pptx",
                     mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    use_container_width=True,
+                    width="stretch",
                 )
             else:
                 st.warning(powerpoint_error or "PowerPoint export is currently unavailable in this environment.")

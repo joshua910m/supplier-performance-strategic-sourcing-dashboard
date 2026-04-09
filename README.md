@@ -12,18 +12,20 @@ That creates a gap between analysis and action. Leaders may know there is exposu
 
 ## Solution
 
-This application ingests messy Excel and CSV procurement files or read-only SQL query results, normalizes the fields into a common structure, and converts them into supplier performance insights, sourcing risk views, scenario-based decision support, and action-oriented supplier recommendations. Instead of stopping at reporting, it combines analytics with business logic to highlight what should be retained, monitored, mitigated, consolidated, or exited.
+This application ingests messy Excel and CSV procurement files or read-only SQL query results, normalizes the fields into a common structure, and converts them into supplier performance insights, sourcing risk views, scenario-based decision support, and action-oriented supplier recommendations. Instead of stopping at reporting, it combines analytics with business logic to distinguish between pure optimization and business-constrained decisions, including protected suppliers, accepted risk, and spend-led sourcing scenarios.
 
 ## Key Features
 
 - Automated data normalization for inconsistent procurement inputs
 - First-class data ingestion from uploaded CSV/Excel files or read-only SQL queries
+- Policy-aware supplier decisions that account for business constraints, accepted risk, and protected or locked suppliers
 - KPI dashboard for supplier footprint, spend, lead time, defects, and single-source exposure
 - Executive summary built from current supplier, component, and scenario analytics
 - Supplier Risk vs Performance visualization for quality, lead-time, and spend exposure
 - Decision Mix by Spend view to show how supplier spend is distributed across decision categories
 - Priority supplier action recommendations with issues, actions, and savings
 - Scenario analysis for supplier consolidation, mitigation, and tradeoff testing
+- Spend-driven and constraint-aware scenario evaluation modes for balancing leverage, risk, and commercial reality
 - Post-scenario negotiation leverage modeling to identify where award concentration may support price, service, or lead-time improvements
 - Strategic sourcing, risk, and action-planning views for follow-through
 
