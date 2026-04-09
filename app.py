@@ -13,9 +13,14 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
-st.set_page_config(page_title="Supplier Performance & Strategic Sourcing Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Supplier Performance & Strategic Sourcing Dashboard",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 st.markdown(
     """
     <style>
@@ -196,16 +201,24 @@ st.markdown(
         margin-bottom: 0.55rem;
     }
     .executive-kpi-value {
-        font-size: 1.85rem;
+        font-size: clamp(1.35rem, 1.8vw, 1.85rem);
         font-weight: 800;
         line-height: 1.1;
         color: #0f172a;
         margin-bottom: 0.45rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
     .executive-kpi-help {
         font-size: 0.84rem;
         line-height: 1.45;
         color: #64748b;
+    }
+    .executive-kpi-delta {
+        display: inline-block;
+        font-weight: 800;
+        color: #0f172a;
     }
     .executive-section-title {
         font-size: 1.2rem;
@@ -241,6 +254,26 @@ st.markdown(
         line-height: 1.45;
         margin: 0.35rem 0 0.45rem 0;
     }
+    div[data-testid="stSpinner"] {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        z-index: 100001 !important;
+        background: rgba(255, 255, 255, 0.96);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 16px;
+        padding: 0.9rem 1.2rem;
+        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.18);
+    }
+    div[data-testid="stSpinner"]::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        background: rgba(241, 245, 249, 0.72);
+        backdrop-filter: blur(2px);
+        z-index: -1;
+    }
     @media (prefers-color-scheme: dark) {
         .executive-kpi-card {
             background: linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.95));
@@ -255,6 +288,9 @@ st.markdown(
         }
         .executive-kpi-help {
             color: #cbd5e1;
+        }
+        .executive-kpi-delta {
+            color: #f8fafc;
         }
         .executive-section-title {
             color: #f8fafc;
@@ -272,6 +308,13 @@ st.markdown(
             background: linear-gradient(90deg, rgba(120, 53, 15, 0.75), rgba(146, 64, 14, 0.75));
             border-left: 4px solid #fbbf24;
             color: #fef3c7;
+        }
+        div[data-testid="stSpinner"] {
+            background: rgba(15, 23, 42, 0.96);
+            border-color: rgba(148, 163, 184, 0.28);
+        }
+        div[data-testid="stSpinner"]::before {
+            background: rgba(15, 23, 42, 0.68);
         }
     }
     </style>
@@ -348,9 +391,20 @@ def cleanup_excel_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def safe_divide(numerator, denominator, fill_value=0.0):
-    denominator_series = pd.Series(denominator)
     numerator_series = pd.Series(numerator)
-    result = np.where(denominator_series.fillna(0).astype(float) == 0, fill_value, numerator_series.astype(float) / denominator_series.astype(float))
+    if np.isscalar(denominator):
+        denominator_series = pd.Series([denominator] * len(numerator_series), index=numerator_series.index)
+    else:
+        denominator_series = pd.Series(denominator)
+        if len(denominator_series) != len(numerator_series):
+            denominator_series = denominator_series.reindex(numerator_series.index)
+        else:
+            denominator_series.index = numerator_series.index
+    result = np.where(
+        denominator_series.fillna(0).astype(float) == 0,
+        fill_value,
+        numerator_series.astype(float) / denominator_series.astype(float),
+    )
     return pd.Series(result, index=numerator_series.index)
 
 
@@ -797,6 +851,7 @@ def classify_suppliers(
     strong_perf_cutoff = supplier_decision_frame["performance_score"].quantile(0.55) if len(supplier_decision_frame) else 0
     weak_perf_cutoff = supplier_decision_frame["performance_score"].quantile(0.30) if len(supplier_decision_frame) else 0
     replaceable_cutoff = supplier_decision_frame["replaceability_score"].quantile(0.60) if len(supplier_decision_frame) else 0
+    supplier_risk_cutoff = supplier_decision_frame["supplier_risk_score"].median() if len(supplier_decision_frame) else 0
 
     decisions: List[Dict[str, object]] = []
     for row in supplier_decision_frame.to_dict(orient="records"):
@@ -807,8 +862,24 @@ def classify_suppliers(
         strong_perf = float(row["performance_score"]) >= float(strong_perf_cutoff)
         weak_perf = float(row["performance_score"]) <= float(weak_perf_cutoff)
         highly_replaceable = float(row["replaceability_score"]) >= float(replaceable_cutoff)
+        defect_median = float(supplier_decision_frame["defect_rate"].median()) if len(supplier_decision_frame) else 0.0
+        lead_time_median = float(supplier_decision_frame["avg_lead_time"].median()) if len(supplier_decision_frame) else 0.0
+        risk_median = float(supplier_decision_frame["avg_risk_score"].median()) if len(supplier_decision_frame) else 0.0
+        protected_but_risky = is_protected and (
+            weak_perf
+            or float(row["supplier_risk_score"]) >= float(supplier_risk_cutoff)
+            or float(row["defect_rate"]) > defect_median
+            or float(row["avg_lead_time"]) > lead_time_median
+            or float(row["avg_risk_score"]) > risk_median
+        )
 
-        if is_protected or is_preferred or (high_spend and strong_perf):
+        if protected_but_risky:
+            decision = "Keep and Monitor"
+            reason = (
+                "Retained only because this supplier currently supports single-source or high-risk component coverage; "
+                "work with the supplier to lower its risk score through a formal improvement plan, and qualify an alternate source in case replacement is still needed later."
+            )
+        elif is_protected or is_preferred or (high_spend and strong_perf):
             decision = "Keep / Consolidate To"
             reason = "Protected supply coverage or preferred performance across overlapping components."
         elif (not is_protected) and highly_replaceable and weak_perf and int(row["preferred_component_count"]) == 0:
@@ -828,9 +899,6 @@ def classify_suppliers(
         estimated_savings = round(float(row["spend"]) * savings_rate, 2)
 
         issues: List[str] = []
-        defect_median = float(supplier_decision_frame["defect_rate"].median()) if len(supplier_decision_frame) else 0.0
-        lead_time_median = float(supplier_decision_frame["avg_lead_time"].median()) if len(supplier_decision_frame) else 0.0
-        risk_median = float(supplier_decision_frame["avg_risk_score"].median()) if len(supplier_decision_frame) else 0.0
         if float(row["defect_rate"]) > defect_median:
             issues.append("quality drift")
         if float(row["avg_lead_time"]) > lead_time_median:
@@ -839,6 +907,8 @@ def classify_suppliers(
             issues.append("elevated external risk")
         if bool(row["supports_single_source"]):
             issues.append("single-source dependency")
+        if protected_but_risky:
+            issues.append("retained only because current coverage depends on it")
         if not issues:
             issues.append("maintain competitiveness")
 
@@ -846,6 +916,11 @@ def classify_suppliers(
             action_plan = "Increase award share where overlap exists, lock in continuity plans, and pursue structured cost negotiations."
         elif decision == "Eliminate / De-prioritize":
             action_plan = "Reallocate demand toward stronger alternatives, restrict new awards, and exit after qualification and inventory safeguards."
+        elif protected_but_risky:
+            action_plan = (
+                "Retain temporarily for current coverage, work with the supplier now to lower its quality, lead-time, or risk issues through a formal improvement plan, "
+                "and qualify an alternate source so future awards can move away from this supplier if the risk score does not improve enough."
+            )
         else:
             action_plan = "Keep active with a corrective scorecard focused on quality, lead time, and risk-mitigation checkpoints."
 
@@ -863,6 +938,89 @@ def classify_suppliers(
         )
 
     return pd.DataFrame(decisions)
+
+
+def build_supplier_explainability(
+    component_supplier_detail: pd.DataFrame,
+    component_summary: pd.DataFrame,
+    supplier_summary: pd.DataFrame,
+) -> pd.DataFrame:
+    if supplier_summary.empty:
+        return pd.DataFrame(
+            columns=[
+                "supplier",
+                "preferred_on_components",
+                "preferred_component_count",
+                "protected_components",
+                "protected_component_count_detail",
+                "retained_because",
+                "future_replacement_candidate",
+            ]
+        )
+
+    ranking = component_supplier_detail.copy()
+    ranking["rank_metric"] = (
+        0.35 * min_max_scale(ranking["defect_rate"], invert=True)
+        + 0.20 * min_max_scale(ranking["avg_lead_time"], invert=True)
+        + 0.15 * min_max_scale(ranking["avg_risk_score"], invert=True)
+        + 0.20 * min_max_scale(ranking["supplier_share"])
+        + 0.10 * min_max_scale(ranking["spend"])
+    )
+    ranking["supplier_rank_within_component"] = ranking.groupby("component")["rank_metric"].rank(method="dense", ascending=False)
+
+    preferred_map = (
+        ranking.loc[ranking["supplier_rank_within_component"].eq(1)]
+        .groupby("supplier")["component"]
+        .apply(lambda values: sorted(pd.unique(values.astype(str))))
+        .to_dict()
+    )
+
+    protected_component_frame = component_summary.loc[
+        component_summary["single_source_flag"] | component_summary["high_risk_flag"],
+        ["component", "single_source_flag", "high_risk_flag"],
+    ].copy()
+    protected_component_map = (
+        component_supplier_detail[["supplier", "component"]]
+        .drop_duplicates()
+        .merge(protected_component_frame, on="component", how="inner")
+        .groupby("supplier")["component"]
+        .apply(lambda values: sorted(pd.unique(values.astype(str))))
+        .to_dict()
+    )
+
+    rows: List[Dict[str, object]] = []
+    for row in supplier_summary.to_dict(orient="records"):
+        supplier_name = str(row.get("supplier", ""))
+        preferred_components = preferred_map.get(supplier_name, [])
+        protected_components = protected_component_map.get(supplier_name, [])
+        retained_bits: List[str] = []
+        if preferred_components:
+            retained_bits.append(f"preferred on {len(preferred_components)} component(s)")
+        if bool(row.get("supports_single_source", False)):
+            retained_bits.append("supports single-source coverage")
+        if bool(row.get("supports_high_risk", False)):
+            retained_bits.append("supports high-risk components")
+        if not retained_bits:
+            retained_bits.append("not structurally protected")
+        decision_reason = str(row.get("decision_reason", ""))
+        future_replacement_candidate = (
+            "Replace Over Time"
+            if "qualify an alternate source" in decision_reason.lower() or "future replacement" in decision_reason.lower()
+            else "Retain Normally"
+        )
+        rows.append(
+            {
+                "supplier": supplier_name,
+                "preferred_on_components": ", ".join(preferred_components) if preferred_components else "None",
+                "preferred_component_count": int(len(preferred_components)),
+                "protected_components": ", ".join(protected_components) if protected_components else "None",
+                "protected_component_count_detail": int(len(protected_components)),
+                "retained_because": "; ".join(retained_bits),
+                "future_replacement_candidate": future_replacement_candidate,
+            }
+        )
+
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(show_spinner=False)
@@ -1045,6 +1203,8 @@ def build_analytics(df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
 
     supplier_decisions = classify_suppliers(component_supplier_detail, component_summary, supplier_summary)
     supplier_summary = supplier_summary.merge(supplier_decisions, on="supplier", how="left")
+    supplier_explainability = build_supplier_explainability(component_supplier_detail, component_summary, supplier_summary)
+    supplier_summary = supplier_summary.merge(supplier_explainability, on="supplier", how="left")
 
     component_supplier_detail = component_supplier_detail.merge(
         component_summary[
@@ -1103,6 +1263,15 @@ def build_executive_summary(
     keep_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Keep / Consolidate To", "supplier"].tolist()
     eliminate_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Eliminate / De-prioritize", "supplier"].tolist()
     monitor_suppliers = supplier_summary.loc[supplier_summary["decision"] == "Keep and Monitor", "supplier"].tolist()
+    replacement_candidates = (
+        supplier_summary.loc[
+            supplier_summary.get("future_replacement_candidate", pd.Series(dtype=str)).eq("Replace Over Time"),
+            "supplier",
+        ]
+        .dropna()
+        .astype(str)
+        .tolist()
+    )
     total_savings = supplier_summary["estimated_savings"].sum()
 
     reason_bits = []
@@ -1128,6 +1297,11 @@ def build_executive_summary(
     keep_count = len(keep_suppliers)
     eliminate_count = len(eliminate_suppliers)
     monitor_count = len(monitor_suppliers)
+    replacement_summary_text = (
+        f"Suppliers that should be retained for now but replaced over time include {format_name_list(replacement_candidates, max_items=4)}. "
+        if replacement_candidates
+        else ""
+    )
 
     summary_text = (
         f"Kraljic quadrant counts are {quadrant_text}. High sourcing-risk components total {high_risk_count} ({high_risk_text}), medium sourcing-risk components total {medium_risk_count} ({medium_risk_text}), and low sourcing-risk components total {low_risk_count}. "
@@ -1136,6 +1310,8 @@ def build_executive_summary(
         f"The highest strategic priority component is {highest_priority_component['component']} because of {priority_reason}. "
         f"Top supplier spend sits with {top_supplier['supplier']} at ${top_supplier['spend']:,.0f}, while {top_component['component']} is the largest-spend component at ${top_component['spend']:,.0f}. "
         f"At this stage, the base analysis indicates a supplier landscape with {keep_count} stronger consolidation candidates, {eliminate_count} potential exit or de-prioritization candidates, and {monitor_count} suppliers that may warrant closer review. "
+        + replacement_summary_text
+        + 
         f"The next step is to run scenarios to test whether single-source exposure, high-risk components, and supplier fragmentation can be reduced without creating new uncovered demand or unacceptable savings tradeoffs. "
         f"Specific supplier actions, economic tradeoffs, and rationale should be confirmed only after an applied scenario is evaluated."
     )
@@ -1170,6 +1346,11 @@ def build_executive_summary(
             ],
             default="Review quality, lead time, and exposure trends before deciding whether intervention is needed.",
         )
+        replace_over_time_mask = executive_actions_source["future_replacement_candidate"].eq("Replace Over Time")
+        executive_actions_source.loc[replace_over_time_mask, "decision_display"] = "Replace Over Time"
+        executive_actions_source.loc[replace_over_time_mask, "action_display"] = (
+            "Retain only for current continuity, work with the supplier to lower its risk score through a formal improvement plan, and qualify an alternate source so future awards can move away safely if needed."
+        )
         executive_actions_source["savings_display"] = np.nan
         supplier_action_plan_source["decision_display"] = executive_actions_source["decision_display"]
         supplier_action_plan_source["action_display"] = executive_actions_source["action_display"]
@@ -1184,14 +1365,18 @@ def build_executive_summary(
             ],
             default="Current data suggests this supplier may need closer review, but scenario testing should confirm whether action is required.",
         )
+        supplier_action_plan_source.loc[replace_over_time_mask, "justification_display"] = (
+            "Current data suggests this supplier must be retained for near-term coverage, but the better long-term move is to improve it now to lower its risk score and replace it later only if an alternate source is qualified and the risk does not come down enough."
+        )
         supplier_action_plan_source["savings_display"] = np.nan
 
     executive_actions = executive_actions_source[
-        ["supplier", "decision_display", "issues", "action_display", "savings_display"]
+        ["supplier", "decision_display", "future_replacement_candidate", "issues", "action_display", "savings_display"]
     ].rename(
         columns={
             "supplier": "Supplier",
             "decision_display": "Executive Priority",
+            "future_replacement_candidate": "Replacement Action",
             "issues": "Portfolio Issue",
             "action_display": "Leadership Action",
             "savings_display": "Estimated Savings",
@@ -1199,12 +1384,27 @@ def build_executive_summary(
     )
 
     supplier_action_plan = supplier_action_plan_source[
-        ["supplier", "decision_display", "issues", "action_display", "savings_display", "justification_display"]
+        [
+            "supplier",
+            "decision_display",
+            "issues",
+            "retained_because",
+            "preferred_on_components",
+            "protected_components",
+            "future_replacement_candidate",
+            "action_display",
+            "savings_display",
+            "justification_display",
+        ]
     ].rename(
         columns={
             "supplier": "Supplier",
             "decision_display": "Decision",
             "issues": "Key Issues",
+            "retained_because": "Retained Because",
+            "preferred_on_components": "Preferred On Components",
+            "protected_components": "Protected Components",
+            "future_replacement_candidate": "Replacement Action",
             "action_display": "Action Plan",
             "savings_display": "Estimated Savings",
             "justification_display": "Why This Supplier Needs Action",
@@ -1325,6 +1525,10 @@ def build_supplier_consolidation_plan(
             "spend",
             "component_count",
             "protected_component_count",
+            "preferred_on_components",
+            "protected_components",
+            "retained_because",
+            "future_replacement_candidate",
             "performance_score",
             "replaceability_score",
             "estimated_savings",
@@ -1403,6 +1607,10 @@ def build_supplier_consolidation_plan(
             "spend": "Spend",
             "component_count": "Components Covered",
             "protected_component_count": "Protected Components",
+            "preferred_on_components": "Preferred On Components",
+            "protected_components": "Protected Component Names",
+            "retained_because": "Retained Because",
+            "future_replacement_candidate": "Replacement Action",
             "performance_score": "Performance Score",
             "replaceability_score": "Replaceability Score",
             "savings_display": "Estimated Savings",
@@ -1418,6 +1626,10 @@ def build_supplier_consolidation_plan(
             "Spend",
             "Components Covered",
             "Protected Components",
+            "Preferred On Components",
+            "Protected Component Names",
+            "Retained Because",
+            "Replacement Action",
             "Performance Score",
             "Replaceability Score",
             "Estimated Savings",
@@ -1905,14 +2117,35 @@ def build_supplier_metric_chart(
 ) -> alt.Chart:
     sorted_data = supplier_summary.sort_values(metric, ascending=ascending).copy()
     chart_data = sorted_data.head(top_n).copy() if top_n is not None else sorted_data
+    supplier_order = chart_data["supplier"].astype(str).tolist()
     color_scale = alt.Scale(
-        domain=["Eliminate / De-prioritize", "Keep and Monitor", "Keep / Consolidate To"],
-        range=["#d73027", "#f39c12", "#2e8b57"],
+        domain=[
+            "Eliminate / De-prioritize",
+            "Removed",
+            "Keep and Monitor",
+            "Mitigation Only",
+            "Keep / Consolidate To",
+            "Retained",
+            "Retained + Mitigation",
+            "Retained For Now",
+            "Retained For Now + Mitigation",
+        ],
+        range=[
+            "#d73027",
+            "#b91c1c",
+            "#f39c12",
+            "#7c3aed",
+            "#2e8b57",
+            "#1f4e79",
+            "#0f766e",
+            "#d97706",
+            "#b45309",
+        ],
     )
     base_chart = alt.Chart(chart_data).mark_bar()
     encodings = {
-        "x": alt.X("supplier:N", title="Supplier", axis=alt.Axis(labelAngle=0, labelLimit=220)),
-        "y": alt.Y(f"{metric}:Q", title=title),
+        "y": alt.Y("supplier:N", title="Supplier", sort=supplier_order),
+        "x": alt.X(f"{metric}:Q", title=title),
         "tooltip": ["supplier", "decision", metric, "spend", "estimated_savings"],
     }
     if color_by_decision:
@@ -1920,6 +2153,232 @@ def build_supplier_metric_chart(
     else:
         encodings["color"] = alt.value("#1f4e79")
     return base_chart.encode(**encodings).properties(height=420).configure_axis(labelFontSize=11, titleFontSize=13).configure_legend(labelFontSize=12, titleFontSize=13)
+
+
+def build_supplier_retention_explainability_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
+    chart_data = supplier_summary.copy()
+    if chart_data.empty:
+        return alt.Chart(pd.DataFrame({"supplier": [], "value": []})).mark_bar()
+    chart_data["preferred_component_count"] = pd.to_numeric(chart_data.get("preferred_component_count", 0), errors="coerce").fillna(0)
+    chart_data["protected_component_count_detail"] = pd.to_numeric(chart_data.get("protected_component_count_detail", 0), errors="coerce").fillna(0)
+    chart_data["Replacement Action"] = chart_data.get("future_replacement_candidate", "Retain Normally").astype(str)
+    chart_data["total_component_context"] = (
+        chart_data["preferred_component_count"] + chart_data["protected_component_count_detail"]
+    )
+    supplier_order = (
+        chart_data.sort_values(
+            ["total_component_context", "protected_component_count_detail", "preferred_component_count", "supplier"],
+            ascending=[False, False, False, True],
+        )["supplier"].astype(str).tolist()
+    )
+    long_data = pd.DataFrame(
+        {
+            "supplier": np.repeat(chart_data["supplier"].astype(str).to_numpy(), 2),
+            "metric": ["Preferred Components", "Protected Components"] * len(chart_data),
+            "count": np.ravel(
+                np.column_stack(
+                    [
+                        chart_data["preferred_component_count"].to_numpy(),
+                        chart_data["protected_component_count_detail"].to_numpy(),
+                    ]
+                )
+            ),
+            "Replacement Action": np.repeat(chart_data["Replacement Action"].to_numpy(), 2),
+            "preferred_on_components": np.repeat(chart_data.get("preferred_on_components", "None").astype(str).to_numpy(), 2),
+            "protected_components": np.repeat(chart_data.get("protected_components", "None").astype(str).to_numpy(), 2),
+            "retained_because": np.repeat(chart_data.get("retained_because", "").astype(str).to_numpy(), 2),
+        }
+    )
+    return (
+        alt.Chart(long_data)
+        .mark_bar()
+        .encode(
+            y=alt.Y("supplier:N", title="Supplier", sort=supplier_order),
+            x=alt.X("count:Q", title="Component Count"),
+            xOffset=alt.XOffset("metric:N"),
+            color=alt.Color(
+                "metric:N",
+                title="Coverage Context",
+                scale=alt.Scale(
+                    domain=["Preferred Components", "Protected Components"],
+                    range=["#1f4e79", "#b45309"],
+                ),
+            ),
+            tooltip=[
+                "supplier",
+                "Replacement Action",
+                "metric",
+                "count",
+                "preferred_on_components",
+                "protected_components",
+                "retained_because",
+            ],
+        )
+        .properties(height=max(320, 55 * len(chart_data)))
+        .configure_axis(labelFontSize=11, titleFontSize=13)
+        .configure_legend(labelFontSize=12, titleFontSize=13)
+    )
+
+
+def build_future_replacement_supplier_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
+    chart_data = supplier_summary.copy()
+    if chart_data.empty:
+        return alt.Chart(pd.DataFrame({"supplier": [], "supplier_risk_score": []})).mark_circle()
+    chart_data["Replacement Action"] = chart_data.get("future_replacement_candidate", "Retain Normally").astype(str)
+    chart_data["label"] = np.where(
+        chart_data["Replacement Action"].eq("Replace Over Time"),
+        chart_data["supplier"].astype(str),
+        "",
+    )
+    points = (
+        alt.Chart(chart_data)
+        .mark_circle(size=180, opacity=0.85, stroke="white", strokeWidth=1)
+        .encode(
+            x=alt.X("supplier_risk_score:Q", title="Supplier Risk Score"),
+            y=alt.Y("protected_component_count_detail:Q", title="Protected Component Count"),
+            color=alt.Color(
+                "Replacement Action:N",
+                scale=alt.Scale(domain=["Replace Over Time", "Retain Normally"], range=["#b91c1c", "#1f4e79"]),
+                title="Replacement Action",
+            ),
+            size=alt.Size("spend:Q", title="Spend", scale=alt.Scale(range=[160, 1400])),
+            tooltip=[
+                "supplier",
+                "supplier_risk_score",
+                "protected_component_count_detail",
+                "preferred_component_count",
+                "Replacement Action",
+                "decision",
+                "spend",
+            ],
+        )
+        .properties(height=360)
+    )
+    labels = alt.Chart(chart_data).mark_text(align="left", dx=8, dy=-6, fontSize=11).encode(
+        x="supplier_risk_score:Q",
+        y="protected_component_count_detail:Q",
+        text="label:N",
+    )
+    return (points + labels).configure_axis(labelFontSize=11, titleFontSize=13).configure_legend(labelFontSize=12, titleFontSize=13)
+
+
+def build_supplier_action_timeline_chart(supplier_summary: pd.DataFrame) -> alt.Chart:
+    if supplier_summary.empty:
+        return alt.Chart(pd.DataFrame({"supplier": [], "stage": []})).mark_circle()
+
+    timeline_rows: List[Dict[str, object]] = []
+    stage_order = ["Now", "Next", "Later"]
+    supplier_frame = supplier_summary.copy().reset_index(drop=True)
+
+    for supplier_rank, row in enumerate(supplier_frame.to_dict(orient="records"), start=1):
+        supplier_name = str(row.get("supplier", "Unknown Supplier"))
+        decision = str(row.get("decision", ""))
+        replacement_action = str(row.get("future_replacement_candidate", "Retain Normally"))
+        retained_because = str(row.get("retained_because", ""))
+        protected_components = str(row.get("protected_components", ""))
+        preferred_components = str(row.get("preferred_on_components", ""))
+        spend = float(pd.to_numeric(row.get("spend", 0.0), errors="coerce"))
+
+        if replacement_action == "Replace Over Time" or "Retained For Now" in decision:
+            action_path = [
+                ("Now", "Retain for continuity", "Keep current coverage in place so exposed components stay supplied."),
+                ("Next", "Improve and qualify alternate", "Launch an improvement plan now and qualify a backup or alternate source."),
+                ("Later", "Shift awards away", "Move future awards away once alternate supply is ready and stable."),
+            ]
+        elif decision in {"Retained + Mitigation", "Retained For Now + Mitigation"}:
+            action_path = [
+                ("Now", "Retain and confirm backup role", "Keep current awards in place and confirm the supplier's mitigation responsibilities."),
+                ("Next", "Validate mitigation readiness", "Check onboarding, response timing, and service expectations for the backup role."),
+                ("Later", "Keep or rebalance", "Maintain the supplier as part of the target structure unless a better mitigation path emerges."),
+            ]
+        elif decision in {"Retained", "Keep / Consolidate To"}:
+            action_path = [
+                ("Now", "Retain active awards", "Keep this supplier in the active award set while preserving current service continuity."),
+                ("Next", "Consolidate and negotiate", "Test or execute additional award share, pricing, and service improvements here."),
+                ("Later", "Expand if results hold", "Use the supplier as a longer-term core source if performance and resilience stay strong."),
+            ]
+        elif decision == "Keep and Monitor":
+            action_path = [
+                ("Now", "Maintain with watchlist", "Keep the supplier active for now because the portfolio still depends on its coverage."),
+                ("Next", "Run corrective scorecard", "Set measurable quality, lead-time, or risk-improvement checkpoints."),
+                ("Later", "Reassess keep vs replace", "Escalate to replacement planning if performance or exposure does not improve."),
+            ]
+        elif decision in {"Removed", "Eliminate / De-prioritize"}:
+            action_path = [
+                ("Now", "Freeze new awards", "Stop adding new routine awards while transition and continuity controls are reviewed."),
+                ("Next", "Reallocate demand safely", "Move demand to retained suppliers only after qualification, inventory, and timing checks."),
+                ("Later", "Exit routine use", "Remove the supplier from the normal award base and keep only contingency dependence if needed."),
+            ]
+        elif decision == "Mitigation Only":
+            action_path = [
+                ("Now", "Keep as qualified backup", "Do not use for primary awards, but preserve the supplier as a contingency source."),
+                ("Next", "Validate activation steps", "Confirm onboarding status, activation timing, and the exact trigger for backup use."),
+                ("Later", "Reconfirm need", "Keep only if the backup role still covers a real exposure; otherwise retire the contingency plan."),
+            ]
+        else:
+            action_path = [
+                ("Now", "Review current position", "Confirm the supplier's current role before changing awards or expectations."),
+                ("Next", "Clarify the next move", "Translate the supplier's risk, coverage, and performance signals into an agreed plan."),
+                ("Later", "Revisit after review", "Update the supplier path once scenario or sourcing decisions are finalized."),
+            ]
+
+        for stage_rank, (stage, stage_title, stage_detail) in enumerate(action_path, start=1):
+            timeline_rows.append(
+                {
+                    "supplier": supplier_name,
+                    "stage": stage,
+                    "stage_rank": stage_rank,
+                    "stage_title": stage_title,
+                    "stage_detail": stage_detail,
+                    "decision": decision,
+                    "Replacement Action": replacement_action,
+                    "retained_because": retained_because,
+                    "protected_components": protected_components,
+                    "preferred_on_components": preferred_components,
+                    "spend": spend,
+                    "supplier_rank": supplier_rank,
+                }
+            )
+
+    chart_data = pd.DataFrame(timeline_rows)
+    supplier_order = supplier_frame["supplier"].astype(str).tolist()
+    base = alt.Chart(chart_data).encode(
+        x=alt.X("stage:N", title="Action Timeline", sort=stage_order),
+        y=alt.Y("supplier:N", title="Supplier", sort=supplier_order),
+        color=alt.Color(
+            "Replacement Action:N",
+            title="Replacement Action",
+            scale=alt.Scale(domain=["Replace Over Time", "Retain Normally"], range=["#b91c1c", "#1f4e79"]),
+        ),
+        detail="supplier:N",
+        tooltip=[
+            alt.Tooltip("supplier:N", title="Supplier"),
+            alt.Tooltip("decision:N", title="Current Decision"),
+            alt.Tooltip("Replacement Action:N", title="Replacement Action"),
+            alt.Tooltip("stage:N", title="Timeline Stage"),
+            alt.Tooltip("stage_title:N", title="Stage Focus"),
+            alt.Tooltip("stage_detail:N", title="Recommended Move"),
+            alt.Tooltip("retained_because:N", title="Retained Because"),
+            alt.Tooltip("protected_components:N", title="Protected Components"),
+            alt.Tooltip("preferred_on_components:N", title="Preferred On Components"),
+            alt.Tooltip("spend:Q", title="Spend", format=",.0f"),
+        ],
+    )
+    lines = base.mark_line(strokeWidth=3, opacity=0.45)
+    points = base.mark_circle(size=180, opacity=0.95, stroke="white", strokeWidth=1.2).encode(
+        shape=alt.Shape(
+            "stage:N",
+            title="Timeline Stage",
+            scale=alt.Scale(domain=stage_order, range=["circle", "diamond", "square"]),
+        )
+    )
+    return (lines + points).properties(height=max(300, 58 * len(supplier_order))).configure_axis(
+        labelFontSize=11,
+        titleFontSize=13,
+    ).configure_legend(
+        labelFontSize=12,
+        titleFontSize=13,
+    )
 
 
 def build_pareto_chart(
@@ -2102,10 +2561,18 @@ def build_supplier_concentration_chart(component_summary: pd.DataFrame, top_n: O
 
 def build_strategic_outcomes_chart(supplier_summary: pd.DataFrame, scenario_applied: bool = False) -> alt.Chart:
     chart_data = supplier_summary.sort_values("spend", ascending=False).copy()
+    chart_data["base_spend"] = pd.to_numeric(chart_data.get("base_spend", chart_data.get("spend", 0.0)), errors="coerce").fillna(0.0)
+    chart_data["scenario_spend"] = pd.to_numeric(chart_data.get("spend", 0.0), errors="coerce").fillna(0.0)
+    chart_data["display_spend"] = np.where(
+        scenario_applied & chart_data["scenario_spend"].le(0.0),
+        chart_data["base_spend"],
+        chart_data["scenario_spend"],
+    )
     if scenario_applied:
         chart_data["outcome_display"] = chart_data["decision"]
         legend_title = "Recommendation"
-        domain = ["Eliminate / De-prioritize", "Keep and Monitor", "Keep / Consolidate To"]
+        domain = ["Removed", "Mitigation Only", "Retained For Now", "Retained For Now + Mitigation", "Retained", "Retained + Mitigation"]
+        color_range = ["#b91c1c", "#7c3aed", "#d97706", "#b45309", "#1f4e79", "#0f766e"]
     else:
         chart_data["outcome_display"] = np.select(
             [
@@ -2117,23 +2584,161 @@ def build_strategic_outcomes_chart(supplier_summary: pd.DataFrame, scenario_appl
         )
         legend_title = "Scenario Test"
         domain = ["Evaluate Exit Scenario", "Evaluate Monitoring Need", "Evaluate Consolidation Scenario"]
+        color_range = ["#d73027", "#f39c12", "#2e8b57"]
     color_scale = alt.Scale(
         domain=domain,
-        range=["#d73027", "#f39c12", "#2e8b57"],
+        range=color_range,
     )
     return (
         alt.Chart(chart_data)
         .mark_bar()
         .encode(
             x=alt.X("supplier:N", title="Supplier", axis=alt.Axis(labelAngle=0, labelLimit=220)),
-            y=alt.Y("spend:Q", title="Spend"),
+            y=alt.Y("display_spend:Q", title="Spend"),
             color=alt.Color("outcome_display:N", title=legend_title, scale=color_scale),
-            tooltip=["supplier", "outcome_display", "decision", "spend", "estimated_savings"],
+            tooltip=[
+                "supplier",
+                "outcome_display",
+                "decision",
+                alt.Tooltip("display_spend:Q", title="Chart Spend", format=",.0f"),
+                alt.Tooltip("scenario_spend:Q", title="Scenario Spend", format=",.0f"),
+                alt.Tooltip("base_spend:Q", title="Base Spend", format=",.0f"),
+                "future_replacement_candidate",
+                "supplier_action_plan",
+                "estimated_savings",
+            ],
         )
         .properties(height=420)
         .configure_axis(labelFontSize=11, titleFontSize=13)
         .configure_legend(labelFontSize=12, titleFontSize=13)
     )
+
+
+def build_supplier_action_plan_chart(supplier_summary: pd.DataFrame, scenario_applied: bool = False) -> alt.Chart:
+    chart_data = supplier_summary.copy()
+    if chart_data.empty:
+        return alt.Chart(pd.DataFrame({"supplier": [], "display_spend": []})).mark_bar()
+
+    chart_data["base_spend"] = pd.to_numeric(chart_data.get("base_spend", chart_data.get("spend", 0.0)), errors="coerce").fillna(0.0)
+    chart_data["scenario_spend"] = pd.to_numeric(chart_data.get("spend", 0.0), errors="coerce").fillna(0.0)
+    chart_data["display_spend"] = np.where(
+        scenario_applied & chart_data["scenario_spend"].le(0.0),
+        chart_data["base_spend"],
+        chart_data["scenario_spend"],
+    )
+
+    if scenario_applied:
+        chart_data["action_display"] = chart_data["decision"].astype(str)
+        chart_data["action_order"] = chart_data["action_display"].map(
+            {
+                "Retained For Now + Mitigation": 1,
+                "Retained For Now": 2,
+                "Retained + Mitigation": 3,
+                "Retained": 4,
+                "Mitigation Only": 5,
+                "Removed": 6,
+            }
+        ).fillna(9)
+        color_domain = ["Retained For Now + Mitigation", "Retained For Now", "Retained + Mitigation", "Retained", "Mitigation Only", "Removed"]
+        color_range = ["#b45309", "#d97706", "#0f766e", "#1f4e79", "#7c3aed", "#b91c1c"]
+        legend_title = "Applied Action"
+    else:
+        chart_data["action_display"] = np.select(
+            [
+                chart_data["decision"].eq("Eliminate / De-prioritize"),
+                chart_data["decision"].eq("Keep / Consolidate To"),
+            ],
+            ["Evaluate Exit Scenario", "Evaluate Consolidation Scenario"],
+            default="Evaluate Monitoring Need",
+        )
+        chart_data["action_order"] = chart_data["action_display"].map(
+            {
+                "Evaluate Exit Scenario": 1,
+                "Evaluate Monitoring Need": 2,
+                "Evaluate Consolidation Scenario": 3,
+            }
+        ).fillna(9)
+        color_domain = ["Evaluate Exit Scenario", "Evaluate Monitoring Need", "Evaluate Consolidation Scenario"]
+        color_range = ["#b91c1c", "#d97706", "#1f4e79"]
+        legend_title = "Action"
+
+    chart_data = chart_data.sort_values(["action_order", "display_spend"], ascending=[True, False]).copy()
+    supplier_order = chart_data["supplier"].astype(str).tolist()
+
+    return (
+        alt.Chart(chart_data)
+        .mark_bar()
+        .encode(
+            y=alt.Y("supplier:N", title="Supplier", sort=supplier_order),
+            x=alt.X("display_spend:Q", title="Spend"),
+            color=alt.Color("action_display:N", title=legend_title, scale=alt.Scale(domain=color_domain, range=color_range)),
+            tooltip=[
+                alt.Tooltip("supplier:N", title="Supplier"),
+                alt.Tooltip("action_display:N", title=legend_title),
+                alt.Tooltip("future_replacement_candidate:N", title="Replacement Action"),
+                alt.Tooltip("display_spend:Q", title="Chart Spend", format=",.0f"),
+                alt.Tooltip("scenario_spend:Q", title="Scenario Spend", format=",.0f"),
+                alt.Tooltip("base_spend:Q", title="Base Spend", format=",.0f"),
+                alt.Tooltip("retained_because:N", title="Retained Because"),
+                alt.Tooltip("supplier_action_plan:N", title="Action Plan"),
+            ],
+        )
+        .properties(height=max(320, 55 * len(chart_data)))
+        .configure_axis(labelFontSize=11, titleFontSize=13)
+        .configure_legend(labelFontSize=12, titleFontSize=13)
+    )
+
+
+def build_action_plan_display_supplier_summary(
+    base_supplier_summary: pd.DataFrame,
+    current_supplier_summary: pd.DataFrame,
+) -> pd.DataFrame:
+    if base_supplier_summary.empty:
+        return current_supplier_summary.copy()
+    if current_supplier_summary.empty:
+        base_frame = base_supplier_summary.copy()
+        if "base_spend" not in base_frame.columns:
+            base_frame["base_spend"] = pd.to_numeric(base_frame.get("spend", 0.0), errors="coerce").fillna(0.0)
+        return base_frame
+
+    base_frame = base_supplier_summary.copy()
+    current_frame = current_supplier_summary.copy()
+    if "base_spend" not in base_frame.columns:
+        base_frame["base_spend"] = pd.to_numeric(base_frame.get("spend", 0.0), errors="coerce").fillna(0.0)
+
+    current_lookup = current_frame.set_index("supplier") if "supplier" in current_frame.columns else pd.DataFrame()
+    merged = base_frame.copy()
+
+    for column in [
+        "decision",
+        "decision_reason",
+        "issues",
+        "supplier_action_plan",
+        "estimated_savings",
+        "future_replacement_candidate",
+        "scenario_role",
+        "scenario_role_rank",
+        "decision_rank_display",
+        "spend",
+        "portfolio_share",
+        "base_spend",
+    ]:
+        if isinstance(current_lookup, pd.DataFrame) and column in current_lookup.columns:
+            merged[column] = current_lookup.reindex(merged["supplier"])[column].values
+
+    if "future_replacement_candidate" not in merged.columns:
+        merged["future_replacement_candidate"] = "Retain Normally"
+    merged["future_replacement_candidate"] = merged["future_replacement_candidate"].fillna("Retain Normally")
+
+    if "spend" in merged.columns:
+        merged["spend"] = pd.to_numeric(merged["spend"], errors="coerce").fillna(0.0)
+    if "estimated_savings" in merged.columns:
+        merged["estimated_savings"] = pd.to_numeric(merged["estimated_savings"], errors="coerce").fillna(0.0)
+    base_spend_fallback = pd.Series(
+        pd.to_numeric(base_frame.set_index("supplier").reindex(merged["supplier"])["base_spend"], errors="coerce")
+    ).fillna(0.0)
+    merged["base_spend"] = pd.to_numeric(merged.get("base_spend", 0.0), errors="coerce").fillna(base_spend_fallback)
+    return merged
 
 
 def build_supplier_component_mix_chart(
@@ -3039,6 +3644,14 @@ def build_applied_scenario_analytics(
     scenario_supplier_summary = scenario_supplier_summary.merge(
         scenario_supplier_decisions, on="supplier", how="left"
     )
+    scenario_supplier_explainability = build_supplier_explainability(
+        scenario_detail,
+        scenario_component_summary,
+        scenario_supplier_summary,
+    )
+    scenario_supplier_summary = scenario_supplier_summary.merge(
+        scenario_supplier_explainability, on="supplier", how="left"
+    )
     scenario_supplier_summary["estimated_savings"] = 0.0
     scenario_supplier_summary["scenario_role"] = np.where(
         scenario_supplier_summary["supplier"].isin(selected_set), "Selected Supplier", "Mitigation Supplier"
@@ -3232,8 +3845,11 @@ def build_applied_supplier_plan_analytics(
     for row in base_supplier_summary.to_dict(orient="records"):
         supplier_name = row["supplier"]
         scenario_row = scenario_lookup.get(supplier_name)
+        base_replacement_action = str(row.get("future_replacement_candidate", "Retain Normally"))
+        base_spend = float(pd.to_numeric(row.get("spend", 0.0), errors="coerce"))
         if scenario_row is None:
             merged_row = row.copy()
+            merged_row["base_spend"] = base_spend
             merged_row["spend"] = 0.0
             merged_row["portfolio_share"] = 0.0
             risk_score = float(row.get("supplier_risk_score", 0.0))
@@ -3259,27 +3875,53 @@ def build_applied_supplier_plan_analytics(
             combined_rows.append(merged_row)
         else:
             merged_row = row.copy()
+            merged_row["base_spend"] = base_spend
             merged_row.update(scenario_row)
+            merged_row["future_replacement_candidate"] = base_replacement_action
             mitigated_components = mitigation_component_map.get(supplier_name, [])
             is_selected_supplier = str(merged_row.get("scenario_role", "")) == "Selected Supplier"
             if is_selected_supplier and mitigated_components:
-                merged_row["decision"] = "Retained + Mitigation"
-                merged_row["decision_reason"] = (
-                    "This supplier was retained for direct supply coverage and also assigned as a mitigation option for "
-                    + ", ".join(mitigated_components)
-                    + "."
-                )
-                merged_row["issues"] = "retained supplier with mitigation role"
-                merged_row["supplier_action_plan"] = (
-                    "Keep this supplier in the active award set and qualify or monitor its backup role for "
-                    + ", ".join(mitigated_components)
-                    + "."
-                )
+                if base_replacement_action == "Replace Over Time":
+                    merged_row["decision"] = "Retained For Now + Mitigation"
+                    merged_row["decision_reason"] = (
+                        "This supplier remains in the applied scenario because current coverage still depends on it, and it is also assigned as a mitigation option for "
+                        + ", ".join(mitigated_components)
+                        + ". We should work with the supplier to lower its risk score while an alternate source is qualified so future awards can move away later if needed."
+                    )
+                    merged_row["issues"] = "retained supplier with mitigation role; replace over time"
+                    merged_row["supplier_action_plan"] = (
+                        "Retain temporarily for active coverage and mitigation on "
+                        + ", ".join(mitigated_components)
+                        + ", work with the supplier now to lower its quality, lead-time, or risk issues through a formal improvement plan, and qualify an alternate source so future awards can transition away safely if needed."
+                    )
+                else:
+                    merged_row["decision"] = "Retained + Mitigation"
+                    merged_row["decision_reason"] = (
+                        "This supplier was retained for direct supply coverage and also assigned as a mitigation option for "
+                        + ", ".join(mitigated_components)
+                        + "."
+                    )
+                    merged_row["issues"] = "retained supplier with mitigation role"
+                    merged_row["supplier_action_plan"] = (
+                        "Keep this supplier in the active award set and qualify or monitor its backup role for "
+                        + ", ".join(mitigated_components)
+                        + "."
+                    )
             elif is_selected_supplier:
-                merged_row["decision"] = "Retained"
-                merged_row["decision_reason"] = "This supplier remains in the applied scenario because it supports the chosen supply structure and coverage profile."
-                merged_row["issues"] = "retained"
-                merged_row["supplier_action_plan"] = "Retain this supplier in the active award set and manage performance against the applied scenario."
+                if base_replacement_action == "Replace Over Time":
+                    merged_row["decision"] = "Retained For Now"
+                    merged_row["decision_reason"] = (
+                        "This supplier remains in the applied scenario because current coverage still depends on it, but we should first work with the supplier to lower its risk score and replace it later only if an alternate source is qualified and the risk does not improve enough."
+                    )
+                    merged_row["issues"] = "retained for current coverage; replace over time"
+                    merged_row["supplier_action_plan"] = (
+                        "Retain temporarily in the active award set for continuity, work with the supplier now to lower its quality, lead-time, or risk issues through a formal improvement plan, and qualify an alternate source so future awards can move away safely if needed."
+                    )
+                else:
+                    merged_row["decision"] = "Retained"
+                    merged_row["decision_reason"] = "This supplier remains in the applied scenario because it supports the chosen supply structure and coverage profile."
+                    merged_row["issues"] = "retained"
+                    merged_row["supplier_action_plan"] = "Retain this supplier in the active award set and manage performance against the applied scenario."
             elif mitigated_components:
                 merged_row["decision"] = "Mitigation Only"
                 merged_row["decision_reason"] = (
@@ -3302,10 +3944,12 @@ def build_applied_supplier_plan_analytics(
         "Removed": 3,
     }
     decision_order = {
-        "Retained + Mitigation": 1,
-        "Retained": 2,
-        "Mitigation Only": 3,
-        "Removed": 4,
+        "Retained For Now + Mitigation": 1,
+        "Retained + Mitigation": 2,
+        "Retained For Now": 3,
+        "Retained": 4,
+        "Mitigation Only": 5,
+        "Removed": 6,
     }
     combined_supplier_summary["scenario_role_rank"] = combined_supplier_summary["scenario_role"].map(role_order).fillna(9)
     combined_supplier_summary["decision_rank_display"] = combined_supplier_summary["decision"].map(decision_order).fillna(9)
@@ -4096,7 +4740,11 @@ def build_total_savings_opportunity(
     return float(base_savings + negotiation_savings.sum())
 
 
-def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataFrame) -> None:
+def render_kpi_cards(
+    component_summary: pd.DataFrame,
+    supplier_summary: pd.DataFrame,
+    base_component_summary: Optional[pd.DataFrame] = None,
+) -> None:
     total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns and not component_summary.empty else 0.0
     supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else 0
     component_count = int(component_summary["component"].nunique()) if "component" in component_summary.columns else 0
@@ -4111,9 +4759,19 @@ def render_kpi_cards(component_summary: pd.DataFrame, supplier_summary: pd.DataF
         if {"avg_lead_time", "spend"}.issubset(supplier_summary.columns) and not supplier_summary.empty
         else 0.0
     )
+    spend_help_text = "Portfolio spend represented in the current dashboard view."
+    if base_component_summary is not None and not base_component_summary.empty and "spend" in base_component_summary.columns:
+        base_total_spend = float(base_component_summary["spend"].sum())
+        spend_delta = total_spend - base_total_spend
+        if abs(spend_delta) < 0.5:
+            spend_help_text += ' <span class="executive-kpi-delta">No material spend change versus the base scenario.</span>'
+        elif spend_delta < 0:
+            spend_help_text += f' <span class="executive-kpi-delta">Savings versus base scenario: {format_currency_compact(abs(spend_delta))}.</span>'
+        else:
+            spend_help_text += f' <span class="executive-kpi-delta">Cost increase versus base scenario: {format_currency_compact(spend_delta)}.</span>'
 
     kpi_items = [
-        ("Total Spend", format_currency_compact(total_spend), "Portfolio spend represented in the current dashboard view."),
+        ("Total Spend", format_currency_compact(total_spend), spend_help_text),
         ("Supplier Count", f"{supplier_count}", "Distinct suppliers included in the active supply base."),
         ("Component Count", f"{component_count}", "Components or materials currently covered in the portfolio."),
         ("Single-Source Components", f"{single_source_count}", "Components still dependent on one effective supplier."),
@@ -4146,6 +4804,11 @@ def build_executive_dashboard_summary(
 ) -> str:
     supplier_summary = analytics["supplier_summary"]
     component_summary = analytics["component_summary"]
+    action_summary = (
+        action_supplier_summary.copy()
+        if action_supplier_summary is not None and not action_supplier_summary.empty
+        else supplier_summary.copy()
+    )
     if supplier_summary.empty or component_summary.empty:
         return "The uploaded portfolio does not yet contain enough supplier and component data to produce an executive summary."
 
@@ -4154,9 +4817,22 @@ def build_executive_dashboard_summary(
     total_spend = float(component_summary["spend"].sum()) if "spend" in component_summary.columns else float(supplier_summary["spend"].sum())
     supplier_count = int(supplier_summary["supplier"].nunique()) if "supplier" in supplier_summary.columns else len(supplier_summary)
     component_count = int(component_summary["component"].nunique()) if "component" in component_summary.columns else len(component_summary)
-    keep_count = int(supplier_summary["decision"].eq("Keep / Consolidate To").sum())
-    monitor_count = int(supplier_summary["decision"].eq("Keep and Monitor").sum())
-    exit_count = int(supplier_summary["decision"].eq("Eliminate / De-prioritize").sum())
+    decision_series = supplier_summary.get("decision", pd.Series(dtype=str)).astype(str)
+    keep_decisions = {"Keep / Consolidate To", "Retained", "Retained For Now", "Retained + Mitigation", "Retained For Now + Mitigation"}
+    monitor_decisions = {"Keep and Monitor", "Mitigation Only"}
+    exit_decisions = {"Eliminate / De-prioritize", "Removed"}
+    keep_count = int(decision_series.isin(keep_decisions).sum())
+    monitor_count = int(decision_series.isin(monitor_decisions).sum())
+    exit_count = int(decision_series.isin(exit_decisions).sum())
+    replacement_candidates = (
+        action_summary.loc[
+            action_summary.get("future_replacement_candidate", pd.Series(dtype=str)).eq("Replace Over Time"),
+            "supplier",
+        ]
+        .dropna()
+        .astype(str)
+        .tolist()
+    )
     single_source_components = component_summary.loc[component_summary["single_source_flag"], "component"].astype(str).tolist()
     high_risk_components = component_summary.loc[component_summary["high_risk_flag"], "component"].astype(str).tolist()
     avg_defect_rate = (
@@ -4198,6 +4874,11 @@ def build_executive_dashboard_summary(
     )
     decision_sentence = (
         f"The supplier decision mix currently points to {count_label(exit_count, 'supplier', 'suppliers')} to exit or de-prioritize, {count_label(keep_count, 'supplier', 'suppliers')} to retain or consolidate toward, and {count_label(monitor_count, 'supplier', 'suppliers')} to keep under active review."
+    )
+    replacement_sentence = (
+        f"Suppliers that should be retained for continuity now but either improved to lower their risk scores or replaced over time include {format_name_list(replacement_candidates, max_items=4)}."
+        if replacement_candidates
+        else "No suppliers are currently tagged for retain-now improvement or replace-over-time treatment."
     )
     risk_sentence = (
         f"The main risk and performance concerns sit in {format_name_list(high_risk_components, max_items=4)}, while the active supplier base is running at roughly {format_percent(avg_defect_rate / 100 if avg_defect_rate > 1 else avg_defect_rate)} average defects and {avg_lead_time:,.1f} days average lead time."
@@ -4248,7 +4929,7 @@ def build_executive_dashboard_summary(
             )
         if qualification_parts:
             qualification_sentence = "The remaining qualification work is to " + ", ".join(qualification_parts) + "."
-    sentences = [concentration_sentence, single_source_sentence, decision_sentence, risk_sentence, savings_sentence]
+    sentences = [concentration_sentence, single_source_sentence, decision_sentence, replacement_sentence, risk_sentence, savings_sentence]
     if qualification_sentence:
         sentences.append(qualification_sentence)
     sentences.append(next_focus)
@@ -4284,6 +4965,7 @@ def build_priority_actions_table(
                 "Spend",
                 "Supplier Risk Score",
                 "Decision",
+                "Replacement Action",
                 "Key Issues",
                 "Recommended Action",
                 "Estimated Savings",
@@ -4291,13 +4973,14 @@ def build_priority_actions_table(
         )
 
     priority_frame = source_supplier_summary[
-        ["supplier", "spend", "supplier_risk_score", "decision", "issues", "estimated_savings"]
+        ["supplier", "spend", "supplier_risk_score", "decision", "future_replacement_candidate", "issues", "estimated_savings"]
     ].rename(
         columns={
             "supplier": "Supplier",
             "spend": "Spend",
             "supplier_risk_score": "Supplier Risk Score",
             "decision": "Decision",
+            "future_replacement_candidate": "Replacement Action",
             "issues": "Key Issues",
             "estimated_savings": "Estimated Savings",
         }
@@ -4375,7 +5058,7 @@ def build_priority_actions_table(
         priority_frame["__decision_priority"] = priority_frame["Decision"].map(lambda value: decision_priority.get(str(value), 9))
         priority_frame = priority_frame.sort_values(["__decision_priority", "Spend"], ascending=[True, False]).drop(columns="__decision_priority")
     result = priority_frame[
-        ["Supplier", "Spend", "Supplier Risk Score", "Decision", "Key Issues", "Recommended Action", "Estimated Savings"]
+        ["Supplier", "Spend", "Supplier Risk Score", "Decision", "Replacement Action", "Key Issues", "Recommended Action", "Estimated Savings"]
     ].reset_index(drop=True)
     if not scenario_applied:
         result = result.head(10)
@@ -4669,7 +5352,7 @@ def render_executive_dashboard(
         render_minor_spacing()
         st.markdown('<div class="executive-section-title">Recommended Scenario</div>', unsafe_allow_html=True)
         render_minor_spacing()
-        render_kpi_cards(component_summary, supplier_summary)
+        render_kpi_cards(component_summary, supplier_summary, base_component_summary=base_analytics["component_summary"])
         render_minor_spacing()
         st.markdown('<div class="executive-section-title">Base Case Reference</div>', unsafe_allow_html=True)
         render_kpi_cards(base_analytics["component_summary"], base_analytics["supplier_summary"])
@@ -4746,8 +5429,14 @@ def render_executive_dashboard(
         priority_actions["priority_rank"] = priority_actions["Decision"].map(
             {
                 "Eliminate / De-prioritize": 1,
-                "Keep / Consolidate To": 2,
-                "Keep and Monitor": 3,
+                "Removed": 1,
+                "Retained For Now + Mitigation": 2,
+                "Retained For Now": 3,
+                "Retained + Mitigation": 4,
+                "Keep / Consolidate To": 5,
+                "Retained": 5,
+                "Keep and Monitor": 6,
+                "Mitigation Only": 7,
             }
         ).fillna(9)
         priority_actions = priority_actions.sort_values(["priority_rank", "Spend"], ascending=[True, False]).drop(columns=["priority_rank"])
@@ -4763,11 +5452,24 @@ def render_executive_dashboard(
                 "Spend": st.column_config.TextColumn("Spend", width="small"),
                 "Supplier Risk Score": st.column_config.NumberColumn("Supplier Risk Score", format="%.1f", width="small"),
                 "Decision": st.column_config.TextColumn("Decision", width="medium"),
+                "Replacement Action": st.column_config.TextColumn("Replacement Action", width="medium"),
                 "Key Issues": st.column_config.TextColumn("Key Issues", width="medium"),
                 "Recommended Action": st.column_config.TextColumn("Recommended Action", width="large"),
                 "Estimated Savings": st.column_config.TextColumn("Estimated Savings", width="small"),
             },
         )
+    render_minor_spacing()
+    st.markdown('<div class="executive-section-title">Supplier Action Overview</div>', unsafe_allow_html=True)
+    render_narrative_text(
+        "This chart shows the action attached to every supplier in the current view, including retained suppliers, remove candidates, and retain-for-now suppliers that should still be replaced over time."
+    )
+    timeline_source = (
+        action_supplier_summary.copy()
+        if scenario_applied and action_supplier_summary is not None and not action_supplier_summary.empty
+        else supplier_summary.copy()
+    )
+    st.altair_chart(build_supplier_action_plan_chart(timeline_source, scenario_applied=scenario_applied), width="stretch")
+    render_hover_hint("Hover to see each supplier's action label, replacement status, spend basis, and the recommended next step.")
     if scenario_applied:
         render_minor_spacing()
         st.markdown('<div class="executive-section-title">Remaining Supplier Qualification Actions</div>', unsafe_allow_html=True)
@@ -4795,12 +5497,14 @@ def render_user_guide() -> None:
 
     st.markdown("### 1. CSV / Excel Workflow")
     st.write("1. Leave `Data Source` set to `Upload File` in the sidebar.")
-    st.write("2. Upload a CSV, XLSX, or XLS procurement file.")
-    st.write("3. Open `Data Quality / Inputs` to confirm the active source, inferred fields, and normalized preview.")
-    st.write("4. Review `Executive Dashboard` for the summary view and top supplier actions.")
-    st.write("5. Use `Component Risk`, `Supplier Decisions`, and `Strategic Sourcing` to understand spend concentration, risk, and sourcing priorities.")
-    st.write("6. Use `Scenario Analysis` to test supplier selection and mitigation choices before applying a scenario to the dashboard.")
-    st.write("7. Use `Action Plan` and `Exports` when you are ready to communicate or hand off the recommendations.")
+    st.write("2. Choose `File Source`.")
+    st.write("3. The dashboard will stay empty until you explicitly choose either `Bundled File Example` or `Upload Your File`.")
+    st.write("4. If you choose `Upload Your File`, add a CSV, XLSX, or XLS procurement file in the sidebar.")
+    st.write("5. Open `Data Quality / Inputs` to confirm the active source, inferred fields, and normalized preview.")
+    st.write("6. Review `Executive Dashboard` for the summary view and top supplier actions.")
+    st.write("7. Use `Component Risk`, `Supplier Decisions`, and `Strategic Sourcing` to understand spend concentration, risk, and sourcing priorities.")
+    st.write("8. Use `Scenario Analysis` to test supplier selection and mitigation choices before applying a scenario to the dashboard.")
+    st.write("9. Use `Action Plan` and `Exports` when you are ready to communicate or hand off the recommendations.")
 
     st.markdown("### 2. SQL Workflow")
     st.write("1. Change `Data Source` to `SQL Database` in the sidebar.")
@@ -4813,7 +5517,7 @@ def render_user_guide() -> None:
     st.write("8. Review `Data Quality / Inputs` before moving through the rest of the dashboard tabs.")
 
     st.markdown("### Recommended First Pass")
-    st.write("1. Load data.")
+    st.write("1. Choose a data source explicitly.")
     st.write("2. Validate the source and normalized preview in `Data Quality / Inputs`.")
     st.write("3. Review the summary and KPIs in `Executive Dashboard`.")
     st.write("4. Inspect `Component Risk` and `Supplier Decisions` to find the main exposure and supplier-action themes.")
@@ -5374,6 +6078,7 @@ def build_kraljic_positioning_summary(component_summary: pd.DataFrame) -> str:
 def load_data(
     data_source: str,
     uploaded_file,
+    upload_source_mode: str = "Bundled File Example",
     sql_query: Optional[str] = None,
     sql_connection_mode: str = "Bundled SQL Example",
 ) -> Tuple[pd.DataFrame, str, List[str], pd.DataFrame]:
@@ -5382,8 +6087,12 @@ def load_data(
             return get_default_data()
         source_name = "SQL Example Package" if sql_connection_mode == "Bundled SQL Example" else "SQL Database"
         return load_sql_data(sql_query, source_name=source_name, sql_connection_mode=sql_connection_mode)
-    if uploaded_file is None:
+    if upload_source_mode == "Choose File Source":
+        raise ValueError("Choose a file source to begin.")
+    if upload_source_mode == "Bundled File Example":
         return get_default_data()
+    if uploaded_file is None:
+        raise ValueError("Upload a CSV or Excel procurement file to use your own data.")
     return load_uploaded_data(uploaded_file.name, uploaded_file.getvalue())
 
 
@@ -5492,16 +6201,30 @@ def render_app():
         st.session_state["sql_mode_message"] = None
     if "sql_connection_mode" not in st.session_state:
         st.session_state["sql_connection_mode"] = "Choose SQL Connection Source"
+    if "upload_source_mode" not in st.session_state:
+        st.session_state["upload_source_mode"] = "Choose File Source"
+    if "sidebar_auto_opened" not in st.session_state:
+        st.session_state["sidebar_auto_opened"] = False
 
     with st.sidebar:
         st.markdown("### Data Source")
         data_source = st.radio("Data Source", ["Upload File", "SQL Database"], key="data_source_mode")
         uploaded_file = None
         if data_source == "Upload File":
-            uploaded_file = st.file_uploader("Upload procurement data", type=["csv", "xlsx", "xls"])
-            st.caption("Supports CSV and Excel files with messy or non-standard procurement fields.")
-            if uploaded_file is None:
-                st.info("Using built-in sample data until a file is uploaded.")
+            upload_source_mode = st.selectbox(
+                "File Source",
+                ["Choose File Source", "Bundled File Example", "Upload Your File"],
+                key="upload_source_mode",
+            )
+            if upload_source_mode == "Choose File Source":
+                st.caption("Choose whether to use the bundled file example or upload your own procurement file.")
+            elif upload_source_mode == "Bundled File Example":
+                st.caption("Uses the bundled CSV/Excel sample package included with the app.")
+            else:
+                uploaded_file = st.file_uploader("Upload procurement data", type=["csv", "xlsx", "xls"])
+                st.caption("Supports CSV and Excel files with messy or non-standard procurement fields.")
+                if uploaded_file is None:
+                    st.info("Upload a CSV or Excel procurement file to use your own data.")
         else:
             st.info(
                 "SQL input is intended for read-only procurement datasets. Results are normalized into the same analysis model as uploaded files."
@@ -5571,11 +6294,51 @@ def render_app():
                 else:
                     st.error(message_text)
 
+    if not st.session_state.get("sidebar_auto_opened", False):
+        components.html(
+            """
+            <script>
+            const ensureSidebarOpen = () => {
+              const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
+              const collapsedControl = window.parent.document.querySelector('[data-testid="collapsedControl"]');
+              const isCollapsed = !sidebar || sidebar.getAttribute('aria-expanded') === 'false';
+              if (isCollapsed && collapsedControl) {
+                collapsedControl.click();
+                return false;
+              }
+              return !isCollapsed;
+            };
+
+            let attempts = 0;
+            const interval = window.setInterval(() => {
+              attempts += 1;
+              const opened = ensureSidebarOpen();
+              if (opened || attempts >= 12) {
+                window.clearInterval(interval);
+              }
+            }, 250);
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
+        st.session_state["sidebar_auto_opened"] = True
+
+    if data_source == "Upload File" and st.session_state.get("upload_source_mode") == "Choose File Source":
+        st.info("Choose a file source in the sidebar to begin. No data is loaded until you select bundled data or upload your own file.")
+        render_user_guide()
+        return
+    if data_source == "Upload File" and st.session_state.get("upload_source_mode") == "Upload Your File" and uploaded_file is None:
+        st.info("Upload a CSV or Excel procurement file in the sidebar to begin.")
+        render_user_guide()
+        return
+
     with st.spinner("Loading and analyzing supplier data..."):
         try:
             normalized_df, data_source_label, input_diagnostics, input_field_status = load_data(
                 data_source,
                 uploaded_file,
+                st.session_state.get("upload_source_mode", "Bundled File Example"),
                 st.session_state.get("active_sql_query"),
                 st.session_state.get("sql_connection_mode", "Bundled SQL Example"),
             )
@@ -5729,6 +6492,23 @@ def render_app():
             "Exports",
         ]
     )
+    if st.session_state.pop("jump_to_executive_dashboard", False):
+        components.html(
+            """
+            <script>
+            const openExecutiveTab = () => {
+              const tabButtons = window.parent.document.querySelectorAll('button[role="tab"]');
+              if (tabButtons && tabButtons.length > 1) {
+                tabButtons[1].click();
+              }
+            };
+            openExecutiveTab();
+            setTimeout(openExecutiveTab, 150);
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
 
     with tabs[0]:
         render_user_guide()
@@ -6412,6 +7192,7 @@ def render_app():
                         "selected_suppliers": tuple(sorted(display_selected_suppliers)),
                         "mitigation_assignments": tuple(sorted(display_mitigation_assignments)),
                     }
+                    st.session_state["jump_to_executive_dashboard"] = True
                     save_persisted_scenario_state(
                         {
                             "data_source_label": data_source_label,
@@ -6678,10 +7459,29 @@ def render_app():
         display_assumptions("Scenario assumptions", scenario_assumptions)
 
     with tabs[7]:
+        current_action_supplier_summary = (
+            applied_plan_analytics["supplier_summary"].copy()
+            if scenario_state and applied_scenario_metrics is not None and applied_plan_analytics is not None
+            else supplier_summary.copy()
+        )
+        action_plan_supplier_summary = build_action_plan_display_supplier_summary(
+            base_analytics["supplier_summary"],
+            current_action_supplier_summary,
+        )
         st.subheader("Supplier Action Plans")
         render_narrative_text(
             "This is the working table for analysts and sourcing teams. It keeps the supplier-by-supplier reasoning and the more specific next step needed to validate or execute each recommendation."
         )
+        render_narrative_text(
+            "Use the explainability visual below to see which suppliers are being retained because they win specific components, which ones are protected by exposed-component coverage, and which retained suppliers should still be treated as future replacement candidates."
+        )
+        st.altair_chart(build_supplier_retention_explainability_chart(action_plan_supplier_summary), width="stretch")
+        render_hover_hint("Hover to see how many components make each supplier preferred versus structurally protected, plus whether it is tagged as a future replacement candidate.")
+        render_narrative_text(
+            "This supplier-action view shows all suppliers in the current portfolio and the specific action attached to each one, including removed suppliers and retain-for-now suppliers that should still be replaced over time."
+        )
+        st.altair_chart(build_supplier_action_plan_chart(action_plan_supplier_summary, scenario_applied=scenario_applied), width="stretch")
+        render_hover_hint("Hover to see each supplier's action label, replacement status, spend basis, and the recommended action text.")
         if scenario_state and applied_scenario_metrics is not None:
             st.caption("Base vs. applied scenario supplier action plans")
             applied_supplier_order = supplier_action_plan["Supplier"].tolist()
@@ -6708,27 +7508,27 @@ def render_app():
             (
                 "This visual shows how supplier spend lines up with the current scenario-test logic, so teams can see which suppliers may be worth testing for consolidation, closer review, or exit exposure. "
                 + (
-                    f"The current portfolio suggests {int(supplier_summary['decision'].eq('Keep / Consolidate To').sum())} suppliers to test for consolidation potential, "
-                    f"{int(supplier_summary['decision'].eq('Keep and Monitor').sum())} suppliers to test for monitoring need, and "
-                    f"{int(supplier_summary['decision'].eq('Eliminate / De-prioritize').sum())} suppliers to test for exit exposure."
+                    f"The current portfolio suggests {int(action_plan_supplier_summary['decision'].eq('Keep / Consolidate To').sum())} suppliers to test for consolidation potential, "
+                    f"{int(action_plan_supplier_summary['decision'].eq('Keep and Monitor').sum())} suppliers to test for monitoring need, and "
+                    f"{int(action_plan_supplier_summary['decision'].eq('Eliminate / De-prioritize').sum())} suppliers to test for exit exposure."
                 )
                 if not scenario_applied
                 else
                 "This visual shows how supplier spend lines up with the current consolidation logic, so teams can see which suppliers are stronger expansion candidates, which are watchlist suppliers, and which may be exit candidates. "
                 + (
-                    f"The current portfolio suggests {int(supplier_summary['decision'].eq('Keep / Consolidate To').sum())} consolidation candidates, "
-                    f"{int(supplier_summary['decision'].eq('Keep and Monitor').sum())} suppliers to monitor, and "
-                    f"{int(supplier_summary['decision'].eq('Eliminate / De-prioritize').sum())} potential exit suppliers."
+                    f"The current portfolio suggests {int(action_plan_supplier_summary['decision'].isin(['Retained', 'Retained For Now', 'Retained + Mitigation', 'Retained For Now + Mitigation']).sum())} retained suppliers in the target structure, "
+                    f"{int(action_plan_supplier_summary['decision'].eq('Mitigation Only').sum())} mitigation-only suppliers, and "
+                    f"{int(action_plan_supplier_summary['decision'].eq('Removed').sum())} removed suppliers."
                 )
             )
         )
-        st.altair_chart(build_strategic_outcomes_chart(supplier_summary, scenario_applied=scenario_applied), width="stretch")
+        st.altair_chart(build_strategic_outcomes_chart(action_plan_supplier_summary, scenario_applied=scenario_applied), width="stretch")
         render_hover_hint()
         show_table(consolidation_plan)
         display_assumptions("Assumptions", consolidation_assumptions)
 
         st.subheader("Supplier Risk Assessment")
-        top_supplier_risk = supplier_summary.sort_values("supplier_risk_score", ascending=False).iloc[0] if not supplier_summary.empty else None
+        top_supplier_risk = action_plan_supplier_summary.sort_values("supplier_risk_score", ascending=False).iloc[0] if not action_plan_supplier_summary.empty else None
         high_risk_supplier_names = (
             supplier_risk_assessment.loc[supplier_risk_assessment["Risk Tier"].eq("High"), "Supplier"].tolist()
             if not supplier_risk_assessment.empty and "Risk Tier" in supplier_risk_assessment.columns
@@ -6745,8 +7545,13 @@ def render_app():
             + " "
             + build_supplier_risk_methodology_note()
         )
-        st.altair_chart(build_supplier_metric_chart(supplier_summary, "supplier_risk_score", "Supplier Risk Score"), width="stretch")
+        st.altair_chart(build_supplier_metric_chart(action_plan_supplier_summary, "supplier_risk_score", "Supplier Risk Score"), width="stretch")
         render_hover_hint()
+        render_narrative_text(
+            "This companion view highlights the suppliers whose current coverage role is keeping them in the portfolio even though their risk profile suggests the team should improve them or replace them over time."
+        )
+        st.altair_chart(build_future_replacement_supplier_chart(action_plan_supplier_summary), width="stretch")
+        render_hover_hint("Hover to compare supplier risk, protected coverage, spend, and whether the supplier is marked for future replacement planning.")
         show_table(supplier_risk_assessment)
         display_assumptions("Assumptions", supplier_risk_assumptions)
 
